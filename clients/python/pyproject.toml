@@ -22,7 +22,9 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://monoblock.casa/keys"
+Homepage = "https://monoblock.casa/keys/"
+Documentation = "https://monoblock.casa/keys/client"
+Repository = "https://github.com/monorez3/keys"
 
 [tool.hatch.build.targets.wheel]
 packages = ["monokeys"]

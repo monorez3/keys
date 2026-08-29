@@ -174,7 +174,8 @@ async def call_key(key_id: str, params: dict, who: str, quota: Quota | None) -> 
 
     if quota is not None:
         quota.spend(who)
-    CACHE.put(cache_key, result, key.manifest.ttl_for(bool(result.get("is_alive", True))))
+    удачно = bool(result.get(key.manifest.short.get("field", ""), True))
+    CACHE.put(cache_key, result, key.manifest.ttl_for(удачно))
     return 200, result | {"cached": False}
 
 
@@ -543,7 +544,7 @@ async def sdk_file(filename: str):
 # --------------------------------------------------------------------------- #
 
 @app.get("/{key_id}")
-async def key_root(key_id: str):
+async def key_root(key_id: str, request: Request):
     """Голое имя ключа — показываем, что он умеет."""
     if key_id not in KEYS:
         return JSONResponse({"error": f"ключа '{key_id}' нет", "keys": sorted(KEYS)}, 404)
