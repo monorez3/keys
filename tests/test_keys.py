@@ -499,3 +499,54 @@ def test_ошибка_сети_не_остаётся_без_объяснения
     with pytest.raises(FetchError) as exc:
         asyncio.run(ctx.fetch("https://t.me/durov"))
     assert str(exc.value).strip()
+
+
+# --- закрытые группы и каналы по приглашению -------------------------------- #
+#
+# Фикстура обезличена: настоящий хэш приглашения и название заменены, иначе
+# публичный репозиторий раздавал бы доступ в чужую закрытую группу.
+
+def test_приглашение_живое_и_это_группа():
+    """Приватность — не вид. За приглашением стоит обычная группа или канал."""
+    res = handler.parse_preview(
+        fixture("private_invite.html"), "+PRIVATEHASHEXAMPLE00",
+        "https://t.me/+PRIVATEHASHEXAMPLE00",
+    )
+    assert res["is_alive"] is True
+    assert res["kind"] == "group", "«Join Group» на кнопке прямо говорит, что это группа"
+    assert res["is_private"] is True
+    assert res["title"]
+
+
+def test_у_приглашения_счётчик_спрятан_но_подпись_есть():
+    res = handler.parse_preview(fixture("private_invite.html"), "+PRIVATEHASHEXAMPLE00", "u")
+    assert res["members_count"] is None
+    assert res["members_label"] == "members"
+
+
+def test_ссылка_приглашения_ведёт_в_приложение():
+    res = handler.parse_preview(fixture("private_invite.html"), "+PRIVATEHASHEXAMPLE00", "u")
+    assert res["deep_link"].startswith("tg://join?invite=")
+    assert res["has_preview"] is False, "у закрытой группы публичной ленты нет"
+
+
+def test_пустое_описание_это_отсутствие_описания():
+    """У приглашений og:description пустая строка — не должна выдаваться за текст."""
+    res = handler.parse_preview(fixture("private_invite.html"), "+PRIVATEHASHEXAMPLE00", "u")
+    assert res["description"] is None
+
+
+def test_заявка_видна_по_кнопке():
+    """«Request to Join» вместо «Join Group» — просто так не войти."""
+    страница = fixture("private_invite.html").replace("Join Group", "Request to Join")
+    res = handler.parse_preview(страница, "+PRIVATEHASHEXAMPLE00", "u")
+    assert res["needs_request"] is True
+    обычная = handler.parse_preview(fixture("private_invite.html"), "+PRIVATEHASHEXAMPLE00", "u")
+    assert обычная["needs_request"] is False
+
+
+def test_в_фикстуре_нет_рабочего_приглашения():
+    """Страж: фикстура не должна once again начать раздавать чужой доступ."""
+    текст = fixture("private_invite.html")
+    assert "PRIVATEHASHEXAMPLE00" in текст
+    assert "cdn4.telesco.pe/file/AVATAR.jpg" in текст

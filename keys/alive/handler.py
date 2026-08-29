@@ -149,11 +149,12 @@ def _kind(username: str, label: str | None, action: str | None, has_preview: boo
     """Тип определяем по нескольким независимым признакам, а не по одному.
 
     Подпись числа надёжнее всего, кнопка действия — второй свидетель:
-    «Start Bot» у бота, «Send Message» у человека, «View in Telegram» у канала.
+    «Start Bot» у бота, «Send Message» у человека, «View in Telegram» у канала,
+    «Join Group» у группы. Приватность типа не отменяет: за приглашением стоит
+    такая же группа или канал, поэтому она живёт отдельным полем is_private, а
+    не подменяет собой вид. «private_invite» остаётся только когда по странице
+    правда не понять, что там.
     """
-    if is_private:
-        return "private_invite"
-
     label = (label or "").lower()
     if "subscriber" in label or "подписчик" in label:
         return "channel"
@@ -175,7 +176,7 @@ def _kind(username: str, label: str | None, action: str | None, has_preview: boo
     uname = username.lower()
     if uname.endswith("bot") or uname in LEGACY_BOTS:
         return "bot"
-    return "unknown"
+    return "private_invite" if is_private else "unknown"
 
 
 def parse_preview(page: str, username: str, url: str, status: int = 200) -> dict:
@@ -212,7 +213,11 @@ def parse_preview(page: str, username: str, url: str, status: int = 200) -> dict
     deeplink_m = DEEPLINK_RE.search(page)
 
     desc_m = DESC_RE.search(page)
-    description = _clean(desc_m.group(1) if desc_m else None) or _meta(page, "og:description")
+    # у приглашений og:description пустая строка — пусть будет честный None,
+    # иначе «описание есть, но пустое» не отличить от «описания нет»
+    description = (
+        _clean(desc_m.group(1) if desc_m else None) or _meta(page, "og:description") or None
+    )
 
     photo = PHOTO_RE.search(page)
     avatar = photo.group(1) if photo else None
@@ -233,6 +238,9 @@ def parse_preview(page: str, username: str, url: str, status: int = 200) -> dict
         "online_count": online_count,
         "verified": bool(VERIFIED_RE.search(title_raw or "")),
         "is_private": is_private,
+        # «Request to Join» вместо «Join Group» — войти можно только по заявке,
+        # которую кто-то должен одобрить
+        "needs_request": "request" in (action or "").lower(),
         "restricted": False,
         "avatar_url": avatar,
         "deep_link": deeplink_m.group(1) if deeplink_m else None,
