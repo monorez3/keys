@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ import spec                                    # noqa: E402
 from limits import Quota                       # noqa: E402
 from manifest import Manifest                  # noqa: E402
 from registry import discover                  # noqa: E402
+from tokens import Tokens                      # noqa: E402
 from runtime import (                          # noqa: E402
     OUTBOUND_BURST,
     OUTBOUND_RPS,
@@ -46,9 +48,15 @@ app = FastAPI(title="Ключи", docs_url=None, redoc_url=None, openapi_url=Non
 KEYS = discover(ROOT / "keys")
 CACHE = Cache(ROOT / "cache.db")
 BUCKET = TokenBucket(OUTBOUND_RPS, OUTBOUND_BURST)
-QUOTA = Quota()
+TOKENS = Tokens(ROOT / "tokens.db")
 STARTED = time.time()
 _client: httpx.AsyncClient | None = None
+
+# Без ключа доступа тоже работает — просто на пробу. Ключ поднимает лимит и
+# считает квоту на человека, а не на весь офис за одним IP.
+QUOTA_ANON = Quota(per_minute=20, per_day=100)
+QUOTA_TOKEN = Quota(per_minute=60, per_day=2000)
+TOKENS_PER_IP_PER_DAY = 5
 
 
 @app.on_event("startup")
@@ -63,12 +71,27 @@ async def _shutdown() -> None:
         await _client.aclose()
 
 
-def client_id(request: Request) -> str:
-    """Токена пока нет — считаем по IP. Заголовок ставит nginx, не пользователь."""
+def client_ip(request: Request) -> str:
+    """Заголовок ставит nginx, не пользователь."""
     return request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
 
 
-async def call_key(key_id: str, params: dict, who: str) -> tuple[int, dict]:
+def caller(request: Request) -> tuple[str, Quota]:
+    """Кто пришёл и по какой квоте его считать.
+
+    Ключ доступа берём как у ИИ-сервисов — из заголовка Authorization. В query
+    тоже разрешаем: иногда позвать неоткуда, кроме адресной строки.
+    """
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    token = token or request.query_params.get("token", "")
+
+    if token and TOKENS.valid(token):
+        return "tok:" + token[-8:], QUOTA_TOKEN
+    return "ip:" + client_ip(request), QUOTA_ANON
+
+
+async def call_key(key_id: str, params: dict, who: str, quota: Quota) -> tuple[int, dict]:
     """Общий путь для обоих лиц: кэш -> квота -> сеть."""
     key = KEYS.get(key_id)
     if key is None:
@@ -83,9 +106,13 @@ async def call_key(key_id: str, params: dict, who: str) -> tuple[int, dict]:
     if cached is not None:
         return 200, cached | {"cached": True}
 
-    ok, why = QUOTA.check(who)
+    ok, why = quota.check(who)
     if not ok:
-        return 429, {"error": why, "потрачено_за_сутки": QUOTA.used(who)}
+        return 429, {
+            "error": why,
+            "потрачено_за_сутки": quota.used(who),
+            "подсказка": "получите бесплатный ключ доступа: POST /token",
+        }
 
     ctx = Context(CACHE, BUCKET, _client)
     try:
@@ -95,7 +122,7 @@ async def call_key(key_id: str, params: dict, who: str) -> tuple[int, dict]:
     except ValueError as exc:
         return 400, {"error": str(exc)}
 
-    QUOTA.spend(who)
+    quota.spend(who)
     CACHE.put(cache_key, result, key.manifest.ttl_for(bool(result.get("is_alive", True))))
     return 200, result | {"cached": False}
 
@@ -178,7 +205,8 @@ def respond(key_id: str, status: int, body: dict, fmt: str):
 async def run_get(key_id: str, request: Request):
     params = dict(request.query_params)
     fmt = params.pop("fmt", "json")
-    status, body = await call_key(key_id, params, client_id(request))
+    params.pop("token", None)
+    status, body = await call_key(key_id, params, *caller(request))
     return respond(key_id, status, body, fmt)
 
 
@@ -188,7 +216,7 @@ async def run_post(key_id: str, request: Request) -> JSONResponse:
         params = await request.json()
     except Exception:
         params = {}
-    status, body = await call_key(key_id, params, client_id(request))
+    status, body = await call_key(key_id, params, *caller(request))
     return JSONResponse(body, status_code=status)
 
 
@@ -241,8 +269,9 @@ async def mcp(request: Request):
         result = {"tools": [_tool(k.manifest) for k in KEYS.values()]}
     elif method == "tools/call":
         params = msg.get("params", {})
+        who, quota = caller(request)
         status, body = await call_key(
-            params.get("name", ""), params.get("arguments", {}) or {}, client_id(request)
+            params.get("name", ""), params.get("arguments", {}) or {}, who, quota
         )
         result = {
             "content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False, indent=2)}],
@@ -255,6 +284,44 @@ async def mcp(request: Request):
         )
 
     return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
+
+# --------------------------------------------------------------------------- #
+# ключ доступа и клиент
+# --------------------------------------------------------------------------- #
+
+@app.post("/token")
+async def issue_token(request: Request) -> JSONResponse:
+    """Бесплатный ключ доступа. Без регистрации: он нужен не для денег,
+    а чтобы квота считалась на человека, а не на весь офис за одним IP."""
+    ip = client_ip(request)
+    if TOKENS.issued_today(ip) >= TOKENS_PER_IP_PER_DAY:
+        return JSONResponse(
+            {"error": f"не больше {TOKENS_PER_IP_PER_DAY} ключей в сутки с одного адреса"}, 429
+        )
+    token = TOKENS.issue(issued_to=ip)
+    return JSONResponse({
+        "token": token,
+        "как_использовать": "положите в .env как KEYS_API_KEY",
+        "лимит": f"{QUOTA_TOKEN.per_minute} в минуту, {QUOTA_TOKEN.per_day} в сутки",
+        "внимание": "показывается один раз — на сервере хранится только хэш",
+    })
+
+
+@app.get("/sdk/python", response_class=PlainTextResponse)
+async def sdk_python(request: Request) -> str:
+    """Клиент одним файлом, с уже подставленным адресом этого сервера.
+
+        curl АДРЕС/sdk/python > keys.py
+    """
+    source = (ROOT / "clients" / "python" / "keys.py").read_text(encoding="utf-8")
+    return re.sub(
+        r'^BASE = "[^"]*"',
+        lambda _: f'BASE = "{base_url(request)}"',
+        source,
+        count=1,
+        flags=re.M,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -282,7 +349,8 @@ async def run_short(key_id: str, value: str, request: Request):
 
     params = dict(request.query_params)
     fmt = params.pop("fmt", "text")  # короткая форма по умолчанию отвечает строкой
+    params.pop("token", None)
     params[key.manifest.primary_param().name] = value
 
-    status, body = await call_key(key_id, params, client_id(request))
+    status, body = await call_key(key_id, params, *caller(request))
     return respond(key_id, status, body, fmt)

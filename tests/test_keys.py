@@ -219,3 +219,81 @@ def test_примеры_используют_короткую_форму():
         for lang, text in snippets.render(m, BASE).items():
             assert link in text, f"{m.id}/{lang}: пример не через короткую форму"
             assert "urlencode" not in text and "URLSearchParams" not in text, f"{m.id}/{lang}"
+
+
+# --- ключ доступа и клиент -------------------------------------------------- #
+
+sys.path.insert(0, str(ROOT / "clients" / "python"))
+
+import keys as client_lib  # noqa: E402
+from tokens import Tokens  # noqa: E402
+
+
+def test_ключ_доступа_выдаётся_и_проверяется(tmp_path):
+    store = Tokens(tmp_path / "t.db")
+    token = store.issue(issued_to="1.2.3.4")
+    assert token.startswith("kx_")
+    assert store.valid(token) is True
+
+
+def test_чужая_строка_не_проходит_за_ключ(tmp_path):
+    store = Tokens(tmp_path / "t.db")
+    store.issue()
+    for мусор in ["", "kx_подделка", "Bearer", "kx_"]:
+        assert store.valid(мусор) is False
+
+
+def test_ключ_хранится_хэшем(tmp_path):
+    """База может утечь — сам ключ из неё достать не должны."""
+    path = tmp_path / "t.db"
+    store = Tokens(path)
+    token = store.issue()
+    assert token.encode() not in path.read_bytes()
+
+
+def test_нельзя_штамповать_ключи_с_одного_адреса(tmp_path):
+    store = Tokens(tmp_path / "t.db")
+    for _ in range(5):
+        store.issue(issued_to="1.2.3.4")
+    assert store.issued_today("1.2.3.4") == 5
+    assert store.issued_today("5.6.7.8") == 0
+
+
+def test_клиент_зовёт_короткую_форму_и_шлёт_ключ(monkeypatch):
+    """Без сети: подменяем urlopen и смотрим, что клиент собрал."""
+    отправлено = {}
+
+    class FakeResponse:
+        def read(self):
+            return b'{"is_alive": true, "title": "Pavel Durov"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        отправлено["url"] = request.full_url
+        отправлено["auth"] = request.get_header("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
+
+    k = client_lib.Keys(token="kx_тест", base="https://example.test")
+    res = k.call("alive", "@durov", fmt="json")
+
+    # @ и + в адресе не кодируем: так ссылка остаётся читаемой глазом
+    assert отправлено["url"].startswith("https://example.test/alive/@durov?")
+    assert "fmt=json" in отправлено["url"]
+    assert отправлено["auth"] == "Bearer kx_тест"
+    assert client_lib.Answer(res).title == "Pavel Durov"
+
+
+def test_ответ_клиента_ведёт_себя_как_объект_и_как_словарь():
+    res = client_lib.Answer({"is_alive": True, "title": "Pavel Durov"})
+    assert res.title == "Pavel Durov" and res["title"] == "Pavel Durov"
+    assert bool(res) is True
+    assert bool(client_lib.Answer({"is_alive": False})) is False
+    with pytest.raises(AttributeError):
+        res.нет_такого_поля
