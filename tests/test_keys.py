@@ -225,7 +225,7 @@ def test_примеры_используют_короткую_форму():
 
 sys.path.insert(0, str(ROOT / "clients" / "python"))
 
-import keys as client_lib  # noqa: E402
+import monokeys as client_lib  # noqa: E402
 from tokens import Tokens  # noqa: E402
 
 

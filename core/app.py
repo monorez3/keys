@@ -312,9 +312,9 @@ async def issue_token(request: Request) -> JSONResponse:
 async def sdk_python(request: Request) -> str:
     """Клиент одним файлом, с уже подставленным адресом этого сервера.
 
-        curl АДРЕС/sdk/python > keys.py
+        curl АДРЕС/sdk/python > monokeys.py
     """
-    source = (ROOT / "clients" / "python" / "keys.py").read_text(encoding="utf-8")
+    source = (ROOT / "clients" / "python" / "monokeys" / "__init__.py").read_text(encoding="utf-8")
     return re.sub(
         r'^BASE = "[^"]*"',
         lambda _: f'BASE = "{base_url(request)}"',

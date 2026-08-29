@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "monokeys"
+version = "0.1.0"
+description = "Клиент «Ключей»: маленькие умные функции одним вызовом, без зависимостей"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Monoblock" }]
+keywords = ["telegram", "api", "keys", "utilities"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+# Зависимостей нет и не будет: весь клиент — обёртка над стандартной библиотекой.
+dependencies = []
+
+[project.urls]
+Homepage = "https://monoblock.casa/keys"
+
+[tool.hatch.build.targets.wheel]
+packages = ["monokeys"]

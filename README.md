@@ -20,7 +20,7 @@ pytest tests/ -q
 
 ```bash
 curl -X POST https://АДРЕС/token          # -> kx_...
-curl https://АДРЕС/sdk/python > keys.py   # клиент одним файлом, ноль зависимостей
+pip install monokeys                      # или одним файлом, см. ниже
 ```
 
 ```
@@ -29,7 +29,7 @@ KEYS_API_KEY=kx_...
 ```
 
 ```python
-from keys import Keys
+from monokeys import Keys
 
 k = Keys()                    # ключ берётся из KEYS_API_KEY
 res = k.alive("@durov")
