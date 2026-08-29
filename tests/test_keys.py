@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -550,3 +551,122 @@ def test_в_фикстуре_нет_рабочего_приглашения():
     текст = fixture("private_invite.html")
     assert "PRIVATEHASHEXAMPLE00" in текст
     assert "cdn4.telesco.pe/file/AVATAR.jpg" in текст
+
+
+# --- защита ключа доступа --------------------------------------------------- #
+#
+# Каждый тест ниже закрывает дыру, которая реально открывалась на живом
+# сервере, а не придуманную.
+
+import security  # noqa: E402
+from runtime import Busy  # noqa: E402
+from tokens import Tokens  # noqa: E402
+
+
+class ФейковыйЗапрос:
+    """Минимум, который читают client_ip и over_https."""
+
+    class _Клиент:
+        def __init__(self, host):
+            self.host = host
+
+    class _Адрес:
+        def __init__(self, scheme):
+            self.scheme = scheme
+
+    def __init__(self, peer="203.0.113.9", headers=None, scheme="http"):
+        self.client = self._Клиент(peer)
+        self.headers = headers or {}
+        self.url = self._Адрес(scheme)
+
+
+def test_заголовку_с_адресом_без_доверенного_прокси_не_верим(monkeypatch):
+    """Пока верили — кто угодно печатал ключи пачками, обходя лимит на адрес."""
+    monkeypatch.setattr(security, "TRUSTED_PROXIES", set())
+    запрос = ФейковыйЗапрос(peer="203.0.113.9", headers={"x-real-ip": "10.0.0.1"})
+    assert security.client_ip(запрос) == "203.0.113.9"
+
+
+def test_заголовок_читается_только_от_своего_прокси(monkeypatch):
+    monkeypatch.setattr(security, "TRUSTED_PROXIES", {"127.0.0.1"})
+    свой = ФейковыйЗапрос(peer="127.0.0.1", headers={"x-real-ip": "10.0.0.1"})
+    чужой = ФейковыйЗапрос(peer="198.51.100.7", headers={"x-real-ip": "10.0.0.1"})
+    assert security.client_ip(свой) == "10.0.0.1"
+    assert security.client_ip(чужой) == "198.51.100.7"
+
+
+def test_ключ_вырезается_из_строки_лога():
+    строка = 'GET /alive/durov?token=kx_SEKRET123&only=kind HTTP/1.1'
+    вырезано = security.redact(строка)
+    assert "kx_SEKRET123" not in вырезано
+    assert "only=kind" in вырезано, "остальное трогать нельзя"
+
+
+def test_фильтр_лога_чистит_запись():
+    import logging
+
+    запись = logging.LogRecord("uvicorn.access", logging.INFO, "", 0,
+                               '%s - "%s"', ("1.2.3.4", "GET /alive/x?token=kx_ABC"), None)
+    security.RedactTokens().filter(запись)
+    assert "kx_ABC" not in str(запись.args)
+
+
+def test_отозванный_ключ_перестаёт_работать_сразу(tmp_path):
+    store = Tokens(tmp_path / "t.db")
+    token = store.issue()
+    assert store.valid(token) is True     # прогреваем кэш опознанных
+    assert store.revoke(token) is True
+    assert store.valid(token) is False, "кэш не должен воскрешать отозванный ключ"
+
+
+def test_отозвать_дважды_нельзя(tmp_path):
+    store = Tokens(tmp_path / "t.db")
+    token = store.issue()
+    assert store.revoke(token) is True
+    assert store.revoke(token) is False
+
+
+def test_отзыв_чужого_ключа_ничего_не_рассказывает(tmp_path):
+    """Ответ на чужой и на несуществующий одинаковый — иначе это оракул."""
+    store = Tokens(tmp_path / "t.db")
+    store.issue()
+    assert store.revoke("kx_" + "z" * 30) is False
+
+
+def test_длинный_мусор_вместо_ключа_отбивается_сразу(tmp_path):
+    store = Tokens(tmp_path / "t.db")
+    assert store.valid("kx_" + "a" * 5000) is False
+    assert store.valid("") is False
+    assert store.valid("Bearer") is False
+
+
+def test_память_под_опознанные_ключи_ограничена(tmp_path, monkeypatch):
+    """Иначе её раздувают простой выдачей ключей."""
+    import tokens as tokens_mod
+
+    monkeypatch.setattr(tokens_mod, "KNOWN_CACHE_LIMIT", 4)
+    store = Tokens(tmp_path / "t.db")
+    for _ in range(12):
+        store.valid(store.issue())
+    assert len(store._known) <= 4
+
+
+def test_кран_отказывает_вместо_вечной_очереди():
+    """Без предела ожидания поток запросов копит очередь: соединения висят,
+    остальным достаётся таймаут вместо ответа."""
+    bucket = TokenBucket(rps=1, burst=1, max_wait=0.2)
+    asyncio.run(bucket.take())            # первый проходит
+    with pytest.raises(Busy):
+        asyncio.run(bucket.take())        # второму ждать дольше предела
+
+
+def test_кран_не_держит_замок_во_сне():
+    """Иначе ждущие стоят в очереди даже когда кран свободен."""
+    bucket = TokenBucket(rps=100, burst=10, max_wait=5)
+
+    async def десять_разом():
+        await asyncio.gather(*(bucket.take() for _ in range(10)))
+
+    начало = time.monotonic()
+    asyncio.run(десять_разом())
+    assert time.monotonic() - начало < 0.5

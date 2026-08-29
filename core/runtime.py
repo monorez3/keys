@@ -44,26 +44,45 @@ class Response:
     url: str
 
 
-class TokenBucket:
-    """Общий кран наружу. Один на процесс, а не один на пользователя."""
+class Busy(RuntimeError):
+    """Кран занят дольше, чем разумно ждать. Честный отказ лучше вечной очереди."""
 
-    def __init__(self, rps: float, burst: int) -> None:
+
+class TokenBucket:
+    """Общий кран наружу. Один на процесс, а не один на пользователя.
+
+    Две тонкости, обе про поведение под нагрузкой:
+
+    * спим ВНЕ замка. Если держать замок во сне, ждущие выстраиваются в
+      очередь даже когда кран свободен, и задержка растёт на ровном месте;
+    * ждём не дольше max_wait. Без этого поток запросов от одного наглеца
+      копит бесконечную очередь: соединения висят, память течёт, а остальным
+      достаётся таймаут вместо ответа. Лучше сразу сказать «занято».
+    """
+
+    def __init__(self, rps: float, burst: int, max_wait: float = 10.0) -> None:
         self.rps = rps
         self.burst = burst
+        self.max_wait = max_wait
         self.tokens = float(burst)
         self.updated = time.monotonic()
         self._lock = asyncio.Lock()
 
     async def take(self) -> None:
-        async with self._lock:
-            while True:
+        крайний_срок = time.monotonic() + self.max_wait
+        while True:
+            async with self._lock:
                 now = time.monotonic()
                 self.tokens = min(self.burst, self.tokens + (now - self.updated) * self.rps)
                 self.updated = now
                 if self.tokens >= 1:
                     self.tokens -= 1
                     return
-                await asyncio.sleep((1 - self.tokens) / self.rps)
+                ждать = (1 - self.tokens) / self.rps
+
+            if time.monotonic() + ждать > крайний_срок:
+                raise Busy("слишком много запросов прямо сейчас, попробуйте позже")
+            await asyncio.sleep(ждать)
 
 
 class Cache:

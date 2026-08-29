@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -13,7 +14,7 @@ import time
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -29,8 +30,15 @@ import spec                                    # noqa: E402
 from limits import Quota                       # noqa: E402
 from manifest import Manifest                  # noqa: E402
 from registry import discover                  # noqa: E402
+from security import (                         # noqa: E402
+    REQUIRE_HTTPS,
+    client_ip,
+    install_log_redaction,
+    over_https,
+)
 from tokens import Tokens                      # noqa: E402
 from runtime import (                          # noqa: E402
+    Busy,
     OUTBOUND_BURST,
     OUTBOUND_RPS,
     Cache,
@@ -57,12 +65,15 @@ _client: httpx.AsyncClient | None = None
 QUOTA_ANON = Quota(per_minute=20, per_day=100)
 QUOTA_TOKEN = Quota(per_minute=60, per_day=2000)
 TOKENS_PER_IP_PER_DAY = 5
+TOKENS_TOTAL_PER_DAY = 2000  # потолок против раздачи с ботнета
 
 
 @app.on_event("startup")
 async def _startup() -> None:
     global _client
     _client = httpx.AsyncClient()
+    # лог доступа пишет полную строку запроса; ключ из query оттуда вырезаем
+    install_log_redaction()
 
 
 @app.on_event("shutdown")
@@ -71,23 +82,37 @@ async def _shutdown() -> None:
         await _client.aclose()
 
 
-def client_ip(request: Request) -> str:
-    """Заголовок ставит nginx, не пользователь."""
-    return request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
+def bearer(request: Request) -> str:
+    """Ключ доступа из заголовка, как у ИИ-сервисов; из query — как поблажка.
+
+    Query оставлен потому, что иногда позвать неоткуда, кроме адресной строки
+    (браузер, ячейка таблицы). Расплата за это — он виден в логах, поэтому
+    оттуда его вырезает фильтр из security.
+    """
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return request.query_params.get("token", "")
 
 
 def caller(request: Request) -> tuple[str, Quota]:
-    """Кто пришёл и по какой квоте его считать.
+    """Кто пришёл и по какой квоте его считать."""
+    token = bearer(request)
+    if token and REQUIRE_HTTPS and not over_https(request):
+        # молча понизить до анонима нельзя: человек будет думать, что ключ
+        # работает, и продолжит слать его открытым текстом
+        raise HTTPException(status_code=400, detail="ключ доступа только по HTTPS")
 
-    Ключ доступа берём как у ИИ-сервисов — из заголовка Authorization. В query
-    тоже разрешаем: иногда позвать неоткуда, кроме адресной строки.
-    """
-    header = request.headers.get("authorization", "")
-    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
-    token = token or request.query_params.get("token", "")
-
-    if token and TOKENS.valid(token):
-        return "tok:" + token[-8:], QUOTA_TOKEN
+    if token:
+        if not TOKENS.valid(token):
+            # молчаливое понижение до анонима — худший вариант: человек с
+            # опечаткой или с отозванным ключом думает, что всё в порядке, и
+            # узнаёт правду только упёршись в лимит для анонимов
+            raise HTTPException(status_code=401, detail="ключ доступа неизвестен или отозван")
+        TOKENS.touch(token)
+        # в опознавателе держим хвост хэша, а не сам ключ: он попадёт в память,
+        # в дампы и в отладочные распечатки
+        return "tok:" + hashlib.sha256(token.encode()).hexdigest()[:16], QUOTA_TOKEN
     return "ip:" + client_ip(request), QUOTA_ANON
 
 
@@ -125,6 +150,8 @@ async def call_key(key_id: str, params: dict, who: str, quota: Quota) -> tuple[i
     ctx = Context(CACHE, BUCKET, _client)
     try:
         result = await key.run(params, ctx)
+    except Busy as exc:
+        return 503, {"error": str(exc)}
     except FetchError as exc:
         return 502, {"error": f"сеть не ответила: {exc}"}
     except ValueError as exc:
@@ -322,19 +349,47 @@ async def mcp(request: Request):
 @app.post("/token")
 async def issue_token(request: Request) -> JSONResponse:
     """Бесплатный ключ доступа. Без регистрации: он нужен не для денег,
-    а чтобы квота считалась на человека, а не на весь офис за одним IP."""
+    а чтобы квота считалась на человека, а не на весь офис за одним IP.
+
+    Два потолка вместо одного: на адрес — против ручной штамповки, общий —
+    против раздачи с ботнета, где адресов много и первый потолок бесполезен.
+    """
     ip = client_ip(request)
     if TOKENS.issued_today(ip) >= TOKENS_PER_IP_PER_DAY:
         return JSONResponse(
             {"error": f"не больше {TOKENS_PER_IP_PER_DAY} ключей в сутки с одного адреса"}, 429
         )
+    if TOKENS.issued_total_today() >= TOKENS_TOTAL_PER_DAY:
+        return JSONResponse(
+            {"error": "сегодня выдано слишком много ключей, попробуйте завтра"}, 429
+        )
+
     token = TOKENS.issue(issued_to=ip)
     return JSONResponse({
         "token": token,
         "как_использовать": "положите в .env как KEYS_API_KEY",
         "лимит": f"{QUOTA_TOKEN.per_minute} в минуту, {QUOTA_TOKEN.per_day} в сутки",
         "внимание": "показывается один раз — на сервере хранится только хэш",
+        "если_утёк": "POST /token/revoke с этим же ключом в заголовке Authorization",
     })
+
+
+@app.post("/token/revoke")
+async def revoke_token(request: Request) -> JSONResponse:
+    """Отозвать свой ключ, если он куда-то утёк.
+
+    Ключ передаётся заголовком и нигде не логируется. Отозвать чужой нельзя:
+    для этого его надо знать, а зная — он уже и так у тебя.
+    """
+    token = request.headers.get("authorization", "")
+    token = token[7:].strip() if token.lower().startswith("bearer ") else ""
+    if not token:
+        return JSONResponse({"error": "ключ ожидается в заголовке Authorization: Bearer"}, 400)
+
+    if TOKENS.revoke(token):
+        return JSONResponse({"отозван": True, "действует": "сразу"})
+    # не говорим, существовал ключ или нет: иначе это способ проверять чужие
+    return JSONResponse({"отозван": False, "причина": "ключ неизвестен или уже отозван"}, 404)
 
 
 @app.get("/sdk/python", response_class=PlainTextResponse)
