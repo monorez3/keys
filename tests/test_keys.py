@@ -782,3 +782,96 @@ def test_ошибки_разложены_по_смыслу(monkeypatch):
     monkeypatch.setattr(client_lib.urllib.request, "urlopen", падать(400))
     with pytest.raises(client_lib.KeysError):
         k.call("alive", "x")
+
+
+# --- публичный ключ: «мы сделали работу за вас» ----------------------------- #
+
+def test_публичный_ключ_заводится_сам(tmp_path):
+    """Без него обещание «просто скопируй и работает» было бы враньём."""
+    store = Tokens(tmp_path / "t.db")
+    assert store.public() is None
+    ключ = store.ensure_public()
+    assert ключ.startswith("kx_")
+    assert store.ensure_public() == ключ, "второй раз новый заводить не надо"
+    assert store.valid(ключ) is True
+
+
+def test_публичный_ключ_единственный_кто_хранится_целиком(tmp_path):
+    """Его печатают открыто — иначе отдать его было бы нечем.
+    Все остальные ключи по-прежнему только хэшами."""
+    store = Tokens(tmp_path / "t.db")
+    публичный = store.ensure_public()
+    личный, _ = store.issue(label="форум")
+
+    сырая_база = (tmp_path / "t.db").read_bytes()
+    assert публичный.encode() in сырая_база
+    assert личный.encode() not in сырая_база
+
+
+def test_смена_публичного_ключа_гасит_старый(tmp_path):
+    """Рубильник для открытого ключа: злоупотребили — сменили."""
+    store = Tokens(tmp_path / "t.db")
+    старый = store.ensure_public()
+    новый = store.rotate_public()
+
+    assert новый != старый
+    assert store.valid(старый) is False
+    assert store.valid(новый) is True
+    assert store.public() == новый
+
+
+def test_клиент_берёт_публичный_ключ_когда_своего_нет(monkeypatch):
+    """Keys() без всякой настройки должен ходить с публичным ключом."""
+    отправлено = []
+
+    class FakeResponse:
+        def __init__(self, body): self.body = body
+        def read(self): return self.body
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+
+    def fake_urlopen(request, timeout=None):
+        отправлено.append((request.full_url, request.get_header("Authorization")))
+        if request.full_url.endswith("/public-token"):
+            return FakeResponse(b"kx_publichniy")
+        return FakeResponse(b'{"is_alive": true}')
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.delenv("KEYS_API_KEY", raising=False)
+
+    k = client_lib.Keys(base="https://example.test")
+    k._catalog = {"keys": [{"id": "alive", "returns": ["is_alive"]}]}
+    k.alive("@durov")
+
+    спрошен_ключ = any(url.endswith("/public-token") for url, _ in отправлено)
+    вызов = [pair for pair in отправлено if "/alive/" in pair[0]][0]
+    assert спрошен_ключ, "клиент должен спросить публичный ключ у сервера"
+    assert вызов[1] == "Bearer kx_publichniy"
+
+
+def test_свой_ключ_важнее_публичного(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise AssertionError("за публичным ключом ходить не должны — есть свой")
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
+    k = client_lib.Keys(token="kx_svoy", base="https://example.test")
+    assert k._ключ() == "kx_svoy"
+
+
+def test_публичный_ключ_спрашивается_один_раз(monkeypatch):
+    запросов = []
+
+    class FakeResponse:
+        def read(self): return b"kx_publichniy"
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+
+    def fake_urlopen(request, timeout=None):
+        запросов.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.delenv("KEYS_API_KEY", raising=False)
+    k = client_lib.Keys(base="https://example.test")
+    k._ключ(); k._ключ(); k._ключ()
+    assert len(запросов) == 1

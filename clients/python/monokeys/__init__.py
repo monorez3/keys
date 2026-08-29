@@ -16,8 +16,9 @@
     print(k.alive.members_count("@durov"))   # 11005185, уже числом
     print(k.alive.text("@durov"))            # жив · channel · Pavel Durov · ...
 
-Ключ доступа выдаёт владелец сервиса. Он бессрочный и без счётчика: сколько
-запросов сделать — ваше дело. Без ключа тоже работает, но как проба.
+Ключа доступа заводить не нужно: если своего нет, клиент возьмёт публичный —
+он напечатан открыто, работает у всех и без счётчика. Свой ключ нужен только
+тем, кто хочет собственный рубильник.
 
 Методы не перечислены в коде: их список приходит с сервера. Появился новый
 ключ — он сразу доступен, обновлять клиент не нужно.
@@ -152,9 +153,11 @@ class _Key:
 class Keys:
     """Подключение к «Ключам».
 
-    token      — ключ доступа. По умолчанию берётся из переменной окружения
-                 KEYS_API_KEY. Без ключа всё работает как проба, с меньшим
-                 запасом; выданный ключ не имеет ни счётчика, ни срока.
+    token      — ключ доступа. По умолчанию берётся из KEYS_API_KEY, а если и
+                 её нет — у сервера спрашивается публичный ключ. То есть
+                 настраивать ничего не надо: Keys() работает сразу. Свой ключ
+                 нужен, только если хочется собственный рубильник. Ни у того,
+                 ни у другого нет ни счётчика, ни срока.
     base       — адрес сервера. По умолчанию тот, с которого скачан клиент.
     timeout    — сколько ждать ответа, секунд. Можно переопределить в вызове.
     retries    — сколько раз повторить при обрыве связи (не при отказе сервера:
@@ -172,6 +175,26 @@ class Keys:
         self.retries = max(0, retries)
         self.user_agent = user_agent
         self._catalog: dict | None = None
+        self._public: str | None = None
+
+    def _ключ(self) -> str:
+        """Свой ключ, а если своего нет — публичный.
+
+        Публичный ключ не зашит в пакет намеренно: его спрашивают у сервера,
+        поэтому смена ключа доходит до всех сразу и не требует нового релиза.
+        Спрашиваем один раз за время жизни объекта.
+        """
+        if self.token:
+            return self.token
+        if self._public is None:
+            try:
+                request = urllib.request.Request(
+                    f"{self.base}/public-token", headers={"User-Agent": self.user_agent}
+                )
+                self._public = self._open(request, self.timeout).strip()
+            except KeysError:
+                self._public = ""  # сервер не дал — пойдём как аноним
+        return self._public
 
     # --- то, ради чего клиент существует ------------------------------- #
 
@@ -194,9 +217,10 @@ class Keys:
         url += "?" + urllib.parse.urlencode(query)
 
         request = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
-        if self.token:
+        ключ = self._ключ()
+        if ключ:
             # только заголовком: в query-строке ключ виден в логах и в истории
-            request.add_header("Authorization", f"Bearer {self.token}")
+            request.add_header("Authorization", f"Bearer {ключ}")
 
         body = self._open(request, timeout if timeout is not None else self.timeout)
         return json.loads(body) if fmt == "json" else body
@@ -262,5 +286,12 @@ class Keys:
             return list(super().__dir__())
 
     def __repr__(self) -> str:
-        с_ключом = "с ключом доступа" if self.token else "без ключа (проба)"
-        return f"<Keys {self.base}, {с_ключом}>"
+        if self.token:
+            чем = "свой ключ"
+        elif self._public:
+            чем = "публичный ключ"
+        elif self._public == "":
+            чем = "без ключа (сервер не дал публичный)"
+        else:
+            чем = "ключ ещё не спрашивали"
+        return f"<Keys {self.base}, {чем}>"

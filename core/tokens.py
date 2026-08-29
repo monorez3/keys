@@ -47,6 +47,8 @@ def public_id(token: str) -> str:
 
 
 class Tokens:
+    PUBLIC_LABEL = "публичный"
+
     def __init__(self, db_path: Path) -> None:
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.execute(
@@ -58,12 +60,16 @@ class Tokens:
             "  issued_to TEXT,"
             "  revoked_at REAL,"
             "  last_used_at REAL,"
-            "  used_count INTEGER NOT NULL DEFAULT 0)"
+            "  used_count INTEGER NOT NULL DEFAULT 0,"
+            # Единственное исключение из правила «ключей в базе нет»: публичный
+            # ключ печатают в README, его смысл в том, чтобы его знали все.
+            # Все остальные ключи здесь по-прежнему только хэшами.
+            "  plain TEXT)"
         )
         existing = {row[1] for row in self.db.execute("PRAGMA table_info(tokens)")}
         for column, kind in (
             ("revoked_at", "REAL"), ("last_used_at", "REAL"),
-            ("label", "TEXT"), ("used_count", "INTEGER"),
+            ("label", "TEXT"), ("used_count", "INTEGER"), ("plain", "TEXT"),
         ):
             if column not in existing:
                 self.db.execute(f"ALTER TABLE tokens ADD COLUMN {column} {kind}")
@@ -72,7 +78,8 @@ class Tokens:
 
     # --- выдача ---------------------------------------------------------- #
 
-    def issue(self, label: str = "", note: str = "", issued_to: str = "") -> tuple[str, str]:
+    def issue(self, label: str = "", note: str = "", issued_to: str = "",
+              *, publish: bool = False) -> tuple[str, str]:
         """Новый ключ. Возвращает (сам ключ, публичный id).
 
         Ключ показывается один раз: на сервере остаётся только хэш. Публичный
@@ -80,9 +87,10 @@ class Tokens:
         """
         token = PREFIX + secrets.token_urlsafe(ENTROPY_BYTES)
         self.db.execute(
-            "INSERT INTO tokens (hash, created_at, label, note, issued_to)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (_hash(token), time.time(), label[:100], note[:200], issued_to[:100]),
+            "INSERT INTO tokens (hash, created_at, label, note, issued_to, plain)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (_hash(token), time.time(), label[:100], note[:200], issued_to[:100],
+             token if publish else None),
         )
         self.db.commit()
         return token, public_id(token)
@@ -174,3 +182,40 @@ class Tokens:
 
     def count(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM tokens").fetchone()[0]
+
+    # --- публичный ключ --------------------------------------------------- #
+    #
+    # «Мы сделали работу за вас»: ключ напечатан открыто, работает у всех и
+    # без счётчика. Раз он публичный — хранится как есть, иначе его нечем
+    # было бы отдать. Это ровно один ключ, и он помечен.
+
+    def public(self) -> str | None:
+        """Текущий публичный ключ, если он есть и не отозван."""
+        row = self.db.execute(
+            "SELECT plain FROM tokens WHERE label = ? AND revoked_at IS NULL"
+            " AND plain IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+            (self.PUBLIC_LABEL,),
+        ).fetchone()
+        return row[0] if row else None
+
+    def ensure_public(self) -> str:
+        """Публичный ключ должен быть всегда — иначе «просто скопируй» не работает."""
+        current = self.public()
+        if current:
+            return current
+        token, _ = self.issue(
+            label=self.PUBLIC_LABEL, note="напечатан открыто, работает у всех",
+            publish=True,
+        )
+        return token
+
+    def rotate_public(self) -> str:
+        """Сменить публичный ключ: старый гаснет, новый выдаётся тут же.
+
+        Это и есть рубильник для публичного ключа. Библиотека спрашивает
+        текущий у сервера, поэтому у всех он обновится сам.
+        """
+        current = self.public()
+        if current:
+            self.revoke(current)
+        return self.ensure_public()

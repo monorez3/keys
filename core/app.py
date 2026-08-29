@@ -79,6 +79,8 @@ async def _startup() -> None:
     _client = httpx.AsyncClient()
     # лог доступа пишет полную строку запроса; ключ из query оттуда вырезаем
     install_log_redaction()
+    # публичный ключ должен существовать всегда, иначе «просто скопируй» врёт
+    TOKENS.ensure_public()
 
 
 @app.on_event("shutdown")
@@ -188,7 +190,7 @@ def manifests() -> list[Manifest]:
 
 @app.get("/", response_class=HTMLResponse)
 async def catalog(request: Request) -> str:
-    return docs.catalog_page(manifests(), base_url(request))
+    return docs.catalog_page(manifests(), base_url(request), TOKENS.ensure_public())
 
 
 @app.get("/k/{key_id}/docs", response_class=HTMLResponse)
@@ -202,7 +204,7 @@ async def key_docs(key_id: str, request: Request) -> str:
 @app.get("/client", response_class=HTMLResponse)
 async def client_docs(request: Request) -> str:
     """Документация по библиотеке: аргументы, методы, ошибки."""
-    return docs.client_page(base_url(request))
+    return docs.client_page(base_url(request), TOKENS.ensure_public())
 
 
 @app.get("/openapi.json")
@@ -401,6 +403,32 @@ async def issue_token(request: Request) -> JSONResponse:
         "как_использовать": "положите получателю в .env как KEYS_API_KEY",
         "внимание": "ключ показывается один раз, на сервере остаётся только хэш",
         "если_придётся_отозвать": f"POST /token/revoke с id {key_id}",
+    })
+
+
+@app.get("/public-token", response_class=PlainTextResponse)
+async def public_token() -> str:
+    """Ключ, напечатанный открыто: работает у всех и без счётчика.
+
+    Библиотека спрашивает его сама, если своего ключа нет. Поэтому смена
+    публичного ключа доходит до всех сразу и не требует нового релиза пакета.
+    """
+    return TOKENS.ensure_public()
+
+
+@app.post("/token/public/rotate")
+async def rotate_public(request: Request) -> JSONResponse:
+    """Сменить публичный ключ: старый гаснет, новый начинает работать.
+
+    Рубильник для публичного ключа — на случай, если открытым ключом начали
+    злоупотреблять. У всех, кто ходит библиотекой, он подхватится сам.
+    """
+    require_admin(request)
+    новый = TOKENS.rotate_public()
+    return JSONResponse({
+        "публичный_ключ": новый,
+        "старый": "отозван",
+        "впишите_в_README": новый,
     })
 
 

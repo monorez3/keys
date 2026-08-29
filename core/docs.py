@@ -108,7 +108,7 @@ def _page(title: str, body: str, script: str = "") -> str:
     )
 
 
-def catalog_page(manifests: list[Manifest], base_url: str) -> str:
+def catalog_page(manifests: list[Manifest], base_url: str, public_token: str = "") -> str:
     cards = []
     for m in manifests:
         tags = "".join(f"<span class=tag>{html.escape(t)}</span>" for t in m.tags)
@@ -131,7 +131,12 @@ def catalog_page(manifests: list[Manifest], base_url: str) -> str:
         "<h2>В ассистента</h2>"
         "<p>Один адрес — и все ключи появляются как обычные инструменты:</p>"
         f"<pre>{html.escape(mcp_config)}</pre>"
-        "<h2>Ключ доступа и клиент</h2>"
+        "<h2>Ключ доступа уже вписан</h2>"
+        "<p>Мы сделали работу за вас: публичный ключ напечатан открыто, работает "
+        "у всех и без счётчика. Библиотека подставляет его сама.</p>"
+        + (f"<div class=keyline><code>{html.escape(public_token)}</code></div>" 
+           if public_token else "")
+        + "<h2>Клиент</h2>"
         "<p>Как у любого ИИ-сервиса: получаете ключ, кладёте в <code>.env</code>, "
         "клиент подставляет его сам.</p>"
         "<pre>pip install monokeys</pre>"
@@ -237,7 +242,7 @@ def not_found(available: list[str]) -> str:
     return _page("Нет такого ключа", f"<h1>Нет такого ключа</h1><p>Есть: {items}</p>")
 
 
-def client_page(base_url: str) -> str:
+def client_page(base_url: str, public_token: str = "") -> str:
     """Документация по библиотеке: что за аргументы и что с ними делать."""
     def таблица(заголовки, строки):
         шапка = "".join(f"<th>{html.escape(h)}</th>" for h in заголовки)
