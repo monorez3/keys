@@ -18,6 +18,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -56,9 +57,15 @@ MCP_PROTOCOL = "2025-06-18"
 app = FastAPI(title="Ключи", docs_url=None, redoc_url=None, openapi_url=None)
 
 KEYS = discover(ROOT / "keys")
-CACHE = Cache(ROOT / "cache.db")
+
+# Базы держим отдельно от кода: в докере это том, иначе пересборка образа
+# стирала бы выданные ключи и весь накопленный кэш.
+DATA = Path(os.environ.get("KEYS_DATA_DIR", ROOT))
+DATA.mkdir(parents=True, exist_ok=True)
+
+CACHE = Cache(DATA / "cache.db")
 BUCKET = TokenBucket(OUTBOUND_RPS, OUTBOUND_BURST)
-TOKENS = Tokens(ROOT / "tokens.db")
+TOKENS = Tokens(DATA / "tokens.db")
 STARTED = time.time()
 _client: httpx.AsyncClient | None = None
 
@@ -470,6 +477,33 @@ async def revoke_token(request: Request) -> JSONResponse:
     return JSONResponse({"отозван": False, "причина": "ключ неизвестен или уже отозван"}, 404)
 
 
+DIST = ROOT / "clients" / "python" / "dist"
+
+
+def колёса() -> list[Path]:
+    return sorted(DIST.glob("*.whl"))
+
+
+@app.get("/sdk/simple/", response_class=HTMLResponse)
+async def simple_index() -> str:
+    """Индекс пакетов по PEP 503.
+
+    Нужен, чтобы адрес установки не менялся с версией:
+        pip install --index-url АДРЕС/sdk/simple monokeys
+    Прямая ссылка на файл тоже работает, но pip требует, чтобы в её имени
+    была версия, — а такую ссылку пришлось бы править в документации каждый раз.
+    """
+    return "<!DOCTYPE html><html><body><a href='monokeys/'>monokeys</a></body></html>"
+
+
+@app.get("/sdk/simple/monokeys/", response_class=HTMLResponse)
+async def simple_monokeys(request: Request) -> str:
+    ссылки = "".join(
+        f"<a href='{base_url(request)}/sdk/{w.name}'>{w.name}</a><br>" for w in колёса()
+    )
+    return f"<!DOCTYPE html><html><body>{ссылки}</body></html>"
+
+
 @app.get("/sdk/python", response_class=PlainTextResponse)
 async def sdk_python(request: Request) -> str:
     """Клиент одним файлом, с уже подставленным адресом этого сервера.
@@ -484,6 +518,19 @@ async def sdk_python(request: Request) -> str:
         count=1,
         flags=re.M,
     )
+
+@app.get("/sdk/{filename}")
+async def sdk_file(filename: str):
+    """Сам файл пакета. Собран с уже подставленным адресом этого сервера,
+    поэтому у скачавшего Keys() работает сразу, без настройки."""
+    if not filename.endswith(".whl"):
+        raise HTTPException(status_code=404, detail="нет такого файла")
+    файл = DIST / Path(filename).name  # имя без путей: наружу оно приходит от чужого
+    if not файл.is_file():
+        raise HTTPException(status_code=404, detail="колесо не собрано на этом сервере")
+    return FileResponse(файл, media_type="application/octet-stream", filename=файл.name)
+
+
 
 
 # --------------------------------------------------------------------------- #
@@ -500,7 +547,7 @@ async def key_root(key_id: str):
     """Голое имя ключа — показываем, что он умеет."""
     if key_id not in KEYS:
         return JSONResponse({"error": f"ключа '{key_id}' нет", "keys": sorted(KEYS)}, 404)
-    return RedirectResponse(f"/k/{key_id}/docs")
+    return RedirectResponse(f"{base_url(request)}/k/{key_id}/docs")
 
 
 @app.get("/{key_id}/{value:path}")

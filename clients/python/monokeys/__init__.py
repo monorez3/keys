@@ -40,7 +40,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = "http://127.0.0.1:8110"  # BASE-MARKER: подменяется при отдаче с сервера
+BASE = "https://monoblock.casa/keys"  # BASE-MARKER: подменяется при отдаче с сервера
 VERSION = "0.2.0"
 
 __all__ = ["Keys", "Answer", "KeysError", "AccessDenied", "Unavailable"]

@@ -113,7 +113,7 @@ def catalog_page(manifests: list[Manifest], base_url: str, public_token: str = "
     for m in manifests:
         tags = "".join(f"<span class=tag>{html.escape(t)}</span>" for t in m.tags)
         cards.append(
-            f"<a class=key href='/k/{m.id}/docs'><h3>{html.escape(m.title)}</h3>"
+            f"<a class=key href='{base_url}/k/{m.id}/docs'><h3>{html.escape(m.title)}</h3>"
             f"<p>{html.escape(m.summary)}</p><div class=tags>{tags}</div></a>"
         )
     mcp_config = (
@@ -152,16 +152,16 @@ def catalog_page(manifests: list[Manifest], base_url: str, public_token: str = "
         "<p class=sub>Методы клиента не зашиты в код — их список приходит с сервера. "
         "Появился новый ключ, и он сразу доступен, обновлять клиент не нужно. "
         "Без ключа доступа тоже работает, но как проба. "
-        "<a href='/client'>Все аргументы библиотеки →</a></p>"
+        f"<a href='{base_url}/client'>Все аргументы библиотеки →</a></p>"
         "<h2>Документация целиком</h2>"
         "<table>"
-        "<tr><td><a href='/llms.txt'>/llms.txt</a></td>"
+        f"<tr><td><a href='{base_url}/llms.txt'>/llms.txt</a></td>"
         "<td>все ключи одним простым текстом — удобно скормить ассистенту</td></tr>"
-        "<tr><td><a href='/openapi.json'>/openapi.json</a></td>"
+        f"<tr><td><a href='{base_url}/openapi.json'>/openapi.json</a></td>"
         "<td>машинная спека: по ней генератор соберёт клиент под ваш язык</td></tr>"
-        "<tr><td><a href='/client'>/client</a></td>"
+        f"<tr><td><a href='{base_url}/client'>/client</a></td>"
         "<td>документация по библиотеке: аргументы, методы, ошибки</td></tr>"
-        "<tr><td><a href='/keys'>/keys</a></td><td>короткий список в JSON</td></tr>"
+        f"<tr><td><a href='{base_url}/keys'>/keys</a></td><td>короткий список в JSON</td></tr>"
         "</table>"
         "<footer>Бесплатно. С ключом доступа запросы не считаются вовсе; "
         "без ключа — небольшой запас на пробу.</footer>"
@@ -204,7 +204,7 @@ def key_page(m: Manifest, base_url: str) -> str:
     example_value = snippets.example_params(m).get(primary.name, "")
 
     body = (
-        f"<p><a href='/'>← все ключи</a></p><h1>{html.escape(m.title)}</h1>"
+        f"<p><a href='{base_url}/'>← все ключи</a></p><h1>{html.escape(m.title)}</h1>"
         f"<p class=sub>{html.escape(m.summary)}</p>"
         "<h2>Ключ</h2>"
         "<p class=sub>Вставьте куда угодно и допишите в конец то, что проверяете.</p>"
@@ -231,8 +231,8 @@ def key_page(m: Manifest, base_url: str) -> str:
         f"<p>Инструмент называется <code>{html.escape(m.id)}</code> — просто попросите словами, "
         "подставлять параметры ассистент будет сам.</p>"
         f"{source}"
-        "<footer><a href='/llms.txt'>вся документация одним текстом</a> · "
-        "<a href='/openapi.json'>машинная спека</a></footer>"
+        f"<footer><a href='{base_url}/llms.txt'>вся документация одним текстом</a> · "
+        f"<a href='{base_url}/openapi.json'>машинная спека</a></footer>"
     )
     return _page(m.title, body, TABS_JS + TRY_JS)
 
@@ -257,7 +257,7 @@ def client_page(base_url: str, public_token: str = "") -> str:
         return f"<table><tr>{шапка}</tr>{тело}</table>"
 
     body = (
-        "<p><a href='/'>← все ключи</a></p><h1>Библиотека monokeys</h1>"
+        f"<p><a href='{base_url}/'>← все ключи</a></p><h1>Библиотека monokeys</h1>"
         "<p class=sub>Клиент одним файлом, без зависимостей. Ставить не обязательно: "
         "ключ работает и обычной ссылкой.</p>"
 
@@ -309,8 +309,8 @@ def client_page(base_url: str, public_token: str = "") -> str:
         "<h2>Методы не зашиты в клиент</h2>"
         "<p>Список ключей и их полей приходит с сервера, поэтому новый ключ "
         "доступен сразу, без обновления пакета.</p>"
-        "<footer><a href='/'>каталог ключей</a> · "
-        "<a href='/llms.txt'>вся документация текстом</a> · "
-        "<a href='/openapi.json'>машинная спека</a></footer>"
+        f"<footer><a href='{base_url}/'>каталог ключей</a> · "
+        f"<a href='{base_url}/llms.txt'>вся документация текстом</a> · "
+        f"<a href='{base_url}/openapi.json'>машинная спека</a></footer>"
     )
     return _page("Библиотека monokeys", body)

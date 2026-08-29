@@ -1,5 +1,20 @@
 # Ключи
 
+**Живёт здесь: https://monoblock.casa/keys/**
+
+```bash
+pip install --index-url https://monoblock.casa/keys/sdk/simple monokeys
+```
+
+```python
+from monokeys import Keys
+print(Keys().alive.text("@durov"))
+# жив · channel · Pavel Durov · 10 998 851 subscribers
+```
+
+Ключ доступа заводить не нужно — библиотека берёт публичный сама.
+
+
 Маленькие умные функции. Каждый ключ — одна папка. Из неё сами собой получаются
 три вещи, ни одну из которых не пишут руками:
 
@@ -15,6 +30,19 @@ pip install -r requirements.txt
 python run.py            # http://127.0.0.1:8110
 pytest tests/ -q
 ```
+
+### Прод
+
+Докер на 8105, nginx отдаёт под `/keys/`, базы на томе `keys-data`.
+
+```bash
+tar czf keys.tgz . && scp keys.tgz ubuntu@137.74.173.198:/tmp/
+ssh ubuntu@137.74.173.198 'rm -rf ~/keys && mkdir ~/keys && tar xzf /tmp/keys.tgz -C ~/keys   && cd ~/keys && docker build -t keys:latest . && docker rm -f keys   && docker run -d --name keys --restart unless-stopped -p 127.0.0.1:8105:8105      --env-file ~/keys.env -v keys-data:/app/data keys:latest'
+```
+
+Секреты лежат в `~/keys.env` на сервере (создаются один раз, в репозиторий не
+попадают). Колесо `monokeys` собирается локально с боевым адресом и уезжает
+вместе с кодом — сервер раздаёт его как индекс пакетов.
 
 ## Ключ доступа и клиент — как у ИИ-сервисов
 
