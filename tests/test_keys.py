@@ -68,7 +68,8 @@ def test_ошибка_сети_не_равна_мёртвому_каналу():
         ("https://t.me/durov", "durov"),
         ("http://telegram.me/durov?x=1", "durov"),
         ("t.me/s/durov", "durov"),
-        ("t.me/+AbC-123", "+AbC-123"),
+        # хэш приглашения у Telegram длинный — коротышки вроде +AbC-123 не бывают
+        ("t.me/+AbCdEfGh-123", "+AbCdEfGh-123"),
     ],
 )
 def test_ссылка_приводится_к_username(raw, expected):
@@ -384,3 +385,117 @@ def test_клиент_просит_одно_поле(monkeypatch):
 
     with pytest.raises(AttributeError, match="нет поля"):
         k.alive.members_cout("@durov")
+
+
+# --- формы ссылок и грязный ввод (найдено живым прогоном) ------------------- #
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("https://t.me/durov/123", "durov"),       # ссылка на конкретный пост
+        ("https://t.me/durov?single", "durov"),
+        ("durov?x=1&y=2", "durov"),
+        ("DUROV", "durov"),                        # регистр Telegram не различает
+        ("  Durov  ", "durov"),
+        ("http://telegram.me/DUROV", "durov"),
+        ("https://t.me/joinchat/AAAAAEkk2WdoDrB4-Q8-gg", "+AAAAAEkk2WdoDrB4-Q8-gg"),
+        ("t.me/+AbCdEfGhIjKl", "+AbCdEfGhIjKl"),
+    ],
+)
+def test_любая_форма_ссылки_приводится_к_одному(raw, expected):
+    assert handler.normalize(raw) == expected
+
+
+def test_разный_регистр_это_одна_страница():
+    """Иначе кэш держал бы две записи и дважды ходил бы наружу за одним и тем же."""
+    assert handler.normalize("DUROV") == handler.normalize("durov") == "durov"
+
+
+def test_старый_формат_приглашения_понимается():
+    """t.me/joinchat/<hash> — тот же приватный вход, что и +hash."""
+    имя = handler.normalize("https://t.me/joinchat/AAAAAEkk2WdoDrB4-Q8-gg")
+    assert имя.startswith("+")
+    res = handler.parse_preview("", имя, "https://t.me/" + имя, status=404)
+    assert res["is_private"] is True
+
+
+def test_заведомая_чушь_не_тратит_наружный_бюджет():
+    """Длина имени у Telegram ограничена — проверяем до похода в сеть."""
+    for мусор in ["a" * 300, "+short", "durov%00", "../../etc/passwd"]:
+        with pytest.raises(ValueError):
+            handler.normalize(мусор)
+
+
+def test_хэш_приглашения_регистр_сохраняет():
+    """У имени регистр не важен, у хэша важен — это разные приглашения."""
+    assert handler.normalize("+AbCdEfGhIjKl") == "+AbCdEfGhIjKl"
+
+
+# --- канон до кэша и повтор при сетевом сбое -------------------------------- #
+
+import asyncio  # noqa: E402
+
+import httpx  # noqa: E402
+
+from runtime import Context, FetchError, TokenBucket  # noqa: E402
+
+
+def test_разные_формы_ссылки_дают_один_ключ_кэша():
+    """16 форм одной ссылки должны стоить один поход наружу, а не 16."""
+    key = discover(ROOT / "keys")["alive"]
+    формы = ["durov", "@durov", "DUROV", "  durov  ", "https://t.me/durov/123",
+             "t.me/s/durov", "https://t.me/durov?single", "durov?x=1"]
+    каноны = {key.canonical({"link": f})["link"] for f in формы}
+    assert каноны == {"durov"}
+
+
+def test_канон_отсеивает_мусор_до_сети():
+    key = discover(ROOT / "keys")["alive"]
+    with pytest.raises(ValueError):
+        key.canonical({"link": "a" * 300})
+
+
+def test_длинный_мусор_не_попадает_в_текст_ошибки():
+    """Иначе трёхсотсимвольная портянка уезжает в ответ и в логи."""
+    key = discover(ROOT / "keys")["alive"]
+    try:
+        key.canonical({"link": "a" * 300})
+    except ValueError as exc:
+        assert len(str(exc)) < 120
+
+
+class _ПадаетПотомОтвечает:
+    """Первый вызов — обрыв соединения, второй — нормальный ответ."""
+
+    def __init__(self):
+        self.вызовов = 0
+
+    async def get(self, url, **kw):
+        self.вызовов += 1
+        if self.вызовов == 1:
+            raise httpx.ConnectError("")
+        return httpx.Response(200, text="страница", request=httpx.Request("GET", url))
+
+
+def test_первый_обрыв_соединения_переспрашивается():
+    """Холодный старт регулярно роняет самый первый запрос — человек не должен
+    это видеть."""
+    клиент = _ПадаетПотомОтвечает()
+    ctx = Context(cache=None, bucket=TokenBucket(1000, 1000), client=клиент)
+    resp = asyncio.run(ctx.fetch("https://t.me/durov"))
+    assert клиент.вызовов == 2
+    assert resp.text == "страница"
+
+
+def test_ошибка_сети_не_остаётся_без_объяснения():
+    """У части ошибок httpx текст пустой — «сеть не ответила: » читается как
+    наша поломка."""
+
+    class ВсегдаПадает:
+        async def get(self, url, **kw):
+            raise httpx.ConnectError("")
+
+    ctx = Context(cache=None, bucket=TokenBucket(1000, 1000), client=ВсегдаПадает())
+    with pytest.raises(FetchError) as exc:
+        asyncio.run(ctx.fetch("https://t.me/durov"))
+    assert str(exc.value).strip()

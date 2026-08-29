@@ -124,11 +124,28 @@ class Context:
         self.client = client
 
     async def fetch(self, url: str, *, timeout: float = 15.0) -> Response:
-        await self.bucket.take()
-        try:
-            resp = await self.client.get(
-                url, timeout=timeout, headers={"User-Agent": UA}, follow_redirects=True
-            )
-        except httpx.HTTPError as exc:
-            raise FetchError(str(exc)) from exc
-        return Response(status=resp.status_code, text=resp.text, url=str(resp.url))
+        """Один поход наружу, с одной повторной попыткой.
+
+        Повтор не роскошь: самый первый запрос после холодного старта регулярно
+        падает на установке соединения, и человек видит 502 на первой же своей
+        проверке. Повторяем только транспортные ошибки — ответ сервера, даже
+        плохой, это ответ, и переспрашивать его незачем.
+        """
+        last: Exception | None = None
+        for попытка in range(2):
+            await self.bucket.take()
+            try:
+                resp = await self.client.get(
+                    url, timeout=timeout, headers={"User-Agent": UA}, follow_redirects=True
+                )
+                return Response(status=resp.status_code, text=resp.text, url=str(resp.url))
+            except httpx.TransportError as exc:
+                last = exc
+                if попытка == 0:
+                    await asyncio.sleep(0.3)
+            except httpx.HTTPError as exc:
+                last = exc
+                break
+        # у части ошибок httpx текст пустой — тогда «сеть не ответила: »
+        # выглядит как наша поломка; имя класса всегда что-то говорит
+        raise FetchError(str(last) or type(last).__name__) from last

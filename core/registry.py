@@ -12,7 +12,8 @@ from manifest import Manifest, ManifestError, load
 @dataclass(slots=True)
 class Key:
     manifest: Manifest
-    run: object  # async def run(params: dict, ctx: Context) -> dict
+    run: object              # async def run(params: dict, ctx: Context) -> dict
+    canonical: object = None # необязательная: def canonical(params) -> params
 
 
 def _load_handler(folder: Path, key_id: str):
@@ -24,7 +25,7 @@ def _load_handler(folder: Path, key_id: str):
     spec.loader.exec_module(module)
     if not hasattr(module, "run"):
         raise ManifestError(f"{handler_path}: нет функции run(params, ctx)")
-    return module.run
+    return module.run, getattr(module, "canonical", None)
 
 
 def discover(keys_dir: Path) -> dict[str, Key]:
@@ -32,5 +33,6 @@ def discover(keys_dir: Path) -> dict[str, Key]:
     found: dict[str, Key] = {}
     for manifest_path in sorted(keys_dir.glob("*/key.json")):
         m = load(manifest_path)
-        found[m.id] = Key(manifest=m, run=_load_handler(manifest_path.parent, m.id))
+        run, canonical = _load_handler(manifest_path.parent, m.id)
+        found[m.id] = Key(manifest=m, run=run, canonical=canonical)
     return found

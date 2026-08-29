@@ -101,6 +101,14 @@ async def call_key(key_id: str, params: dict, who: str, quota: Quota) -> tuple[i
     if missing:
         return 400, {"error": "не хватает параметров: " + ", ".join(missing)}
 
+    # канон до кэша: иначе durov, DUROV и t.me/durov/123 — три записи и три
+    # похода наружу за одной и той же страницей
+    if key.canonical:
+        try:
+            params = key.canonical(params)
+        except ValueError as exc:
+            return 400, {"error": str(exc)}
+
     cache_key = key_id + ":" + json.dumps(params, sort_keys=True, ensure_ascii=False)
     cached = CACHE.get(cache_key)
     if cached is not None:

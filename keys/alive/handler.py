@@ -54,22 +54,46 @@ RESTRICTED_MARKERS = (
 LEGACY_BOTS = {"botfather", "stickers", "gif", "vid", "pic", "bing", "wiki", "imdb"}
 
 LINK_RE = re.compile(
-    r"^(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/(?:s/)?(\+?[\w\d_-]+)", re.I
+    r"^(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/"
+    r"(?:s/)?(?:(joinchat)/)?(\+?[\w\d_-]+)",
+    re.I,
 )
+
+# Имя пользователя у Telegram не длиннее 32 символов; хэш приглашения длиннее,
+# но тоже не бесконечный. Проверяем до похода в сеть: незачем тратить наружный
+# бюджет на заведомую чушь вроде трёхсот букв «a».
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+INVITE_RE = re.compile(r"^\+[A-Za-z0-9_-]{8,64}$")
 
 
 def normalize(link: str) -> str:
-    """'@durov', 'https://t.me/durov?x=1', 't.me/+abc' -> username или +hash."""
+    """'@durov', 'https://t.me/durov/123', 't.me/joinchat/abc' -> username или +hash.
+
+    Имя приводится к нижнему регистру: Telegram различает регистр только на
+    вид, durov и DUROV — одна страница. Без этого кэш держал бы две записи и
+    дважды ходил бы наружу за одним и тем же.
+    """
     value = (link or "").strip()
     if not value:
         raise ValueError("пустая ссылка")
+    показать = link if len(link) <= 60 else link[:57] + "..."
+
     m = LINK_RE.match(value)
     if m:
-        return m.group(1)
-    value = value.lstrip("@")
-    if not re.fullmatch(r"\+?[\w\d_-]+", value):
-        raise ValueError(f"не похоже на ссылку Telegram: {link!r}")
-    return value
+        joinchat, name = m.group(1), m.group(2)
+        # старый формат приглашения t.me/joinchat/<hash> — тот же приватный вход
+        value = ("+" + name) if joinchat else name
+    else:
+        value = value.lstrip("@").split("?")[0].split("/")[0]
+
+    if value.startswith("+"):
+        if not INVITE_RE.match(value):
+            raise ValueError(f"не похоже на приглашение Telegram: {показать!r}")
+        return value  # хэш приглашения регистрозависим, не трогаем
+
+    if not USERNAME_RE.match(value):
+        raise ValueError(f"не похоже на ссылку Telegram: {показать!r}")
+    return value.lower()
 
 
 def _clean(fragment: str | None) -> str | None:
@@ -215,6 +239,16 @@ def parse_preview(page: str, username: str, url: str, status: int = 200) -> dict
         "has_preview": bool(preview_m),
         "action": action,
     }
+
+
+def canonical(params: dict) -> dict:
+    """Привести параметры к канону ДО кэша.
+
+    Без этого шага «durov», «DUROV», «@durov» и «t.me/durov/123» — четыре
+    разные записи кэша и четыре похода наружу за одной и той же страницей.
+    Заодно тут отсеивается мусор, не потратив наружный бюджет.
+    """
+    return params | {"link": normalize(params.get("link", ""))}
 
 
 async def run(params: dict, ctx) -> dict:
