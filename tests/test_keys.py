@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -140,6 +141,7 @@ def test_разные_клиенты_не_мешают_друг_другу():
 
 # --- примеры кода и машинные описания -------------------------------------- #
 
+import docs      # noqa: E402
 import snippets  # noqa: E402
 import spec      # noqa: E402
 
@@ -239,7 +241,7 @@ from tokens import Tokens  # noqa: E402
 
 def test_ключ_доступа_выдаётся_и_проверяется(tmp_path):
     store = Tokens(tmp_path / "t.db")
-    token = store.issue(issued_to="1.2.3.4")
+    token, key_id = store.issue(issued_to="1.2.3.4")
     assert token.startswith("kx_")
     assert store.valid(token) is True
 
@@ -255,16 +257,39 @@ def test_ключ_хранится_хэшем(tmp_path):
     """База может утечь — сам ключ из неё достать не должны."""
     path = tmp_path / "t.db"
     store = Tokens(path)
-    token = store.issue()
+    token, key_id = store.issue()
     assert token.encode() not in path.read_bytes()
 
 
-def test_нельзя_штамповать_ключи_с_одного_адреса(tmp_path):
+def test_публичный_id_не_выдаёт_сам_ключ(tmp_path):
+    """По id владелец видит и отзывает ключ, но восстановить ключ из id нельзя."""
     store = Tokens(tmp_path / "t.db")
-    for _ in range(5):
-        store.issue(issued_to="1.2.3.4")
-    assert store.issued_today("1.2.3.4") == 5
-    assert store.issued_today("5.6.7.8") == 0
+    token, key_id = store.issue(label="форум")
+    assert len(key_id) == 12
+    assert key_id not in token
+    assert token not in json.dumps(store.listing(), ensure_ascii=False)
+
+
+def test_владелец_отзывает_по_id_не_зная_ключа(tmp_path):
+    store = Tokens(tmp_path / "t.db")
+    token, key_id = store.issue(label="форум")
+    assert store.valid(token) is True
+    assert store.revoke_by_id(key_id) is True
+    assert store.valid(token) is False
+    assert store.revoke_by_id(key_id) is False
+
+
+def test_в_списке_видно_кому_и_сколько(tmp_path):
+    """Счётчик тут для владельца — «этим пользуются, а этот мёртвый»,
+    а не для того, чтобы кого-то урезать."""
+    store = Tokens(tmp_path / "t.db")
+    token, _ = store.issue(label="форум overclockers.ru")
+    for _ in range(3):
+        store.touch(token)
+    строка = store.listing()[0]
+    assert строка["кому"] == "форум overclockers.ru"
+    assert строка["запросов"] == 3
+    assert строка["отозван"] is False
 
 
 def test_клиент_зовёт_короткую_форму_и_шлёт_ключ(monkeypatch):
@@ -613,7 +638,7 @@ def test_фильтр_лога_чистит_запись():
 
 def test_отозванный_ключ_перестаёт_работать_сразу(tmp_path):
     store = Tokens(tmp_path / "t.db")
-    token = store.issue()
+    token, key_id = store.issue()
     assert store.valid(token) is True     # прогреваем кэш опознанных
     assert store.revoke(token) is True
     assert store.valid(token) is False, "кэш не должен воскрешать отозванный ключ"
@@ -621,7 +646,7 @@ def test_отозванный_ключ_перестаёт_работать_ср�
 
 def test_отозвать_дважды_нельзя(tmp_path):
     store = Tokens(tmp_path / "t.db")
-    token = store.issue()
+    token, key_id = store.issue()
     assert store.revoke(token) is True
     assert store.revoke(token) is False
 
@@ -647,7 +672,7 @@ def test_память_под_опознанные_ключи_ограничен�
     monkeypatch.setattr(tokens_mod, "KNOWN_CACHE_LIMIT", 4)
     store = Tokens(tmp_path / "t.db")
     for _ in range(12):
-        store.valid(store.issue())
+        store.valid(store.issue()[0])
     assert len(store._known) <= 4
 
 
@@ -670,3 +695,90 @@ def test_кран_не_держит_замок_во_сне():
     начало = time.monotonic()
     asyncio.run(десять_разом())
     assert time.monotonic() - начало < 0.5
+
+
+# --- документация по библиотеке --------------------------------------------- #
+
+import clientdoc  # noqa: E402
+
+
+def test_каждый_аргумент_клиента_описан_в_readme():
+    """Аргумент появился в клиенте, а описать забыли — тест краснеет."""
+    readme = (ROOT / "clients" / "python" / "README.md").read_text(encoding="utf-8")
+    for имя in clientdoc.ОБЯЗАТЕЛЬНО_В_README:
+        assert имя in readme, f"аргумент '{имя}' не описан в README пакета"
+
+
+def test_описанные_аргументы_и_правда_есть_в_клиенте():
+    """Обратная сторона: описали то, чего в коде нет."""
+    import inspect
+
+    подключение = set(inspect.signature(client_lib.Keys.__init__).parameters)
+    for имя, _, _ in clientdoc.ПОДКЛЮЧЕНИЕ:
+        assert имя in подключение, f"'{имя}' описан, но у Keys такого аргумента нет"
+
+    вызов = set(inspect.signature(client_lib._Key.__call__).parameters)
+    for имя, _, _ in clientdoc.ВЫЗОВ:
+        assert имя.strip("*") in вызов or имя == "**params", f"'{имя}' описан, но вызов его не берёт"
+
+    for имя, _ in clientdoc.ОШИБКИ:
+        assert hasattr(client_lib, имя), f"исключения '{имя}' в клиенте нет"
+
+
+def test_страница_библиотеки_рисуется():
+    страница = docs.client_page(BASE)
+    assert "monokeys" in страница
+    for имя, _, _ in clientdoc.ПОДКЛЮЧЕНИЕ:
+        assert имя in страница
+    for имя, _ in clientdoc.ОШИБКИ:
+        assert имя in страница
+
+
+def test_аргументы_вызова_доезжают_до_адреса(monkeypatch):
+    """only, fmt и timeout должны влиять на запрос, а не молча теряться."""
+    отправлено = {}
+
+    class FakeResponse:
+        def read(self): return b'{"members_count": 1}'
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+
+    def fake_urlopen(request, timeout=None):
+        отправлено["url"] = request.full_url
+        отправлено["timeout"] = timeout
+        отправлено["ua"] = request.get_header("User-agent")
+        return FakeResponse()
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
+    k = client_lib.Keys(base="https://example.test", timeout=20, user_agent="тест/1")
+    k._catalog = {"keys": [{"id": "alive", "returns": ["members_count"]}]}
+
+    k.alive("@durov", only="members_count", timeout=3)
+    assert "only=members_count" in отправлено["url"]
+    assert отправлено["timeout"] == 3, "timeout вызова должен побеждать общий"
+    assert отправлено["ua"] == "тест/1"
+
+
+def test_ошибки_разложены_по_смыслу(monkeypatch):
+    """401 и 503 — разные беды, ловить их одинаково неудобно."""
+    import urllib.error
+
+    def падать(код):
+        def fake_urlopen(request, timeout=None):
+            raise urllib.error.HTTPError(request.full_url, код, "нет", {}, None)
+        return fake_urlopen
+
+    k = client_lib.Keys(base="https://example.test", retries=0)
+    k._catalog = {"keys": [{"id": "alive", "returns": []}]}
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", падать(401))
+    with pytest.raises(client_lib.AccessDenied):
+        k.call("alive", "x")
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", падать(503))
+    with pytest.raises(client_lib.Unavailable):
+        k.call("alive", "x")
+
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", падать(400))
+    with pytest.raises(client_lib.KeysError):
+        k.call("alive", "x")

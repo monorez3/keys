@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import re
 import sys
 import time
@@ -36,7 +38,7 @@ from security import (                         # noqa: E402
     install_log_redaction,
     over_https,
 )
-from tokens import Tokens                      # noqa: E402
+from tokens import Tokens, public_id           # noqa: E402
 from runtime import (                          # noqa: E402
     Busy,
     OUTBOUND_BURST,
@@ -60,12 +62,15 @@ TOKENS = Tokens(ROOT / "tokens.db")
 STARTED = time.time()
 _client: httpx.AsyncClient | None = None
 
-# Без ключа доступа тоже работает — просто на пробу. Ключ поднимает лимит и
-# считает квоту на человека, а не на весь офис за одним IP.
+# С ключом — без счётчика вообще: ключ выдаёт владелец, и считать чужие
+# запросы он не собирается. Без ключа остаётся проба, чтобы случайный прохожий
+# мог попробовать, но не мог занять собой весь кран.
 QUOTA_ANON = Quota(per_minute=20, per_day=100)
-QUOTA_TOKEN = Quota(per_minute=60, per_day=2000)
-TOKENS_PER_IP_PER_DAY = 5
-TOKENS_TOTAL_PER_DAY = 2000  # потолок против раздачи с ботнета
+QUOTA_NONE = None  # у ключа квоты нет — это не оговорка, это решение
+
+# Ключи раздаёт владелец. Без этой переменной выдача просто закрыта: открытое
+# самообслуживание — это раздача бессрочных ключей кому попало.
+ADMIN_TOKEN = os.environ.get("KEYS_ADMIN_TOKEN", "")
 
 
 @app.on_event("startup")
@@ -95,8 +100,8 @@ def bearer(request: Request) -> str:
     return request.query_params.get("token", "")
 
 
-def caller(request: Request) -> tuple[str, Quota]:
-    """Кто пришёл и по какой квоте его считать."""
+def caller(request: Request) -> tuple[str, Quota | None]:
+    """Кто пришёл и считать ли его вообще. Для ключа — не считать."""
     token = bearer(request)
     if token and REQUIRE_HTTPS and not over_https(request):
         # молча понизить до анонима нельзя: человек будет думать, что ключ
@@ -112,11 +117,11 @@ def caller(request: Request) -> tuple[str, Quota]:
         TOKENS.touch(token)
         # в опознавателе держим хвост хэша, а не сам ключ: он попадёт в память,
         # в дампы и в отладочные распечатки
-        return "tok:" + hashlib.sha256(token.encode()).hexdigest()[:16], QUOTA_TOKEN
+        return "tok:" + public_id(token), QUOTA_NONE
     return "ip:" + client_ip(request), QUOTA_ANON
 
 
-async def call_key(key_id: str, params: dict, who: str, quota: Quota) -> tuple[int, dict]:
+async def call_key(key_id: str, params: dict, who: str, quota: Quota | None) -> tuple[int, dict]:
     """Общий путь для обоих лиц: кэш -> квота -> сеть."""
     key = KEYS.get(key_id)
     if key is None:
@@ -139,13 +144,14 @@ async def call_key(key_id: str, params: dict, who: str, quota: Quota) -> tuple[i
     if cached is not None:
         return 200, cached | {"cached": True}
 
-    ok, why = quota.check(who)
-    if not ok:
-        return 429, {
-            "error": why,
-            "потрачено_за_сутки": quota.used(who),
-            "подсказка": "получите бесплатный ключ доступа: POST /token",
-        }
+    if quota is not None:  # None = пришли с ключом, запросы не считаем
+        ok, why = quota.check(who)
+        if not ok:
+            return 429, {
+                "error": why,
+                "потрачено_за_сутки": quota.used(who),
+                "подсказка": "с ключом доступа лимита нет — попросите ключ у владельца",
+            }
 
     ctx = Context(CACHE, BUCKET, _client)
     try:
@@ -157,7 +163,8 @@ async def call_key(key_id: str, params: dict, who: str, quota: Quota) -> tuple[i
     except ValueError as exc:
         return 400, {"error": str(exc)}
 
-    quota.spend(who)
+    if quota is not None:
+        quota.spend(who)
     CACHE.put(cache_key, result, key.manifest.ttl_for(bool(result.get("is_alive", True))))
     return 200, result | {"cached": False}
 
@@ -190,6 +197,12 @@ async def key_docs(key_id: str, request: Request) -> str:
     if key is None:
         return docs.not_found(sorted(KEYS))
     return docs.key_page(key.manifest, base_url(request))
+
+
+@app.get("/client", response_class=HTMLResponse)
+async def client_docs(request: Request) -> str:
+    """Документация по библиотеке: аргументы, методы, ошибки."""
+    return docs.client_page(base_url(request))
 
 
 @app.get("/openapi.json")
@@ -346,47 +359,84 @@ async def mcp(request: Request):
 # ключ доступа и клиент
 # --------------------------------------------------------------------------- #
 
+def require_admin(request: Request) -> None:
+    """Выдача и обзор ключей — только владельцу.
+
+    Без KEYS_ADMIN_TOKEN выдача закрыта совсем: пустой пароль хуже
+    отсутствующего, потому что выглядит как защита.
+    """
+    if not ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="выдача ключей выключена: на сервере не задан KEYS_ADMIN_TOKEN",
+        )
+    предъявлен = request.headers.get("x-admin-token", "") or bearer(request)
+    if not hmac.compare_digest(предъявлен, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="нужен ключ владельца")
+
+
 @app.post("/token")
 async def issue_token(request: Request) -> JSONResponse:
-    """Бесплатный ключ доступа. Без регистрации: он нужен не для денег,
-    а чтобы квота считалась на человека, а не на весь офис за одним IP.
+    """Выдать ключ. Только владелец сервиса.
 
-    Два потолка вместо одного: на адрес — против ручной штамповки, общий —
-    против раздачи с ботнета, где адресов много и первый потолок бесполезен.
+    Ключ бессрочный и без счётчика: кому выдали — тот пользуется сколько
+    нужно. Единственное, что с ним можно сделать потом, — отозвать.
     """
-    ip = client_ip(request)
-    if TOKENS.issued_today(ip) >= TOKENS_PER_IP_PER_DAY:
-        return JSONResponse(
-            {"error": f"не больше {TOKENS_PER_IP_PER_DAY} ключей в сутки с одного адреса"}, 429
-        )
-    if TOKENS.issued_total_today() >= TOKENS_TOTAL_PER_DAY:
-        return JSONResponse(
-            {"error": "сегодня выдано слишком много ключей, попробуйте завтра"}, 429
-        )
+    require_admin(request)
 
-    token = TOKENS.issue(issued_to=ip)
+    тело = {}
+    try:
+        тело = await request.json()
+    except Exception:
+        pass
+    подпись = str(тело.get("кому") or тело.get("label") or "")
+    заметка = str(тело.get("заметка") or тело.get("note") or "")
+
+    token, key_id = TOKENS.issue(label=подпись, note=заметка, issued_to=client_ip(request))
     return JSONResponse({
         "token": token,
-        "как_использовать": "положите в .env как KEYS_API_KEY",
-        "лимит": f"{QUOTA_TOKEN.per_minute} в минуту, {QUOTA_TOKEN.per_day} в сутки",
-        "внимание": "показывается один раз — на сервере хранится только хэш",
-        "если_утёк": "POST /token/revoke с этим же ключом в заголовке Authorization",
+        "id": key_id,
+        "кому": подпись,
+        "лимит": "нет — ни по количеству, ни по сроку",
+        "как_использовать": "положите получателю в .env как KEYS_API_KEY",
+        "внимание": "ключ показывается один раз, на сервере остаётся только хэш",
+        "если_придётся_отозвать": f"POST /token/revoke с id {key_id}",
     })
+
+
+@app.get("/tokens")
+async def list_tokens(request: Request) -> JSONResponse:
+    """Кому что выдано и чем пользуются. Самих ключей тут нет и быть не может."""
+    require_admin(request)
+    return JSONResponse({"ключи": TOKENS.listing()})
 
 
 @app.post("/token/revoke")
 async def revoke_token(request: Request) -> JSONResponse:
-    """Отозвать свой ключ, если он куда-то утёк.
+    """Отозвать ключ. Два способа, потому что стороны две.
 
-    Ключ передаётся заголовком и нигде не логируется. Отозвать чужой нельзя:
-    для этого его надо знать, а зная — он уже и так у тебя.
+    Владелец ключа отзывает свой, предъявив сам ключ. Владелец сервиса
+    отзывает любой по публичному id, не зная самого ключа.
     """
-    token = request.headers.get("authorization", "")
-    token = token[7:].strip() if token.lower().startswith("bearer ") else ""
-    if not token:
-        return JSONResponse({"error": "ключ ожидается в заголовке Authorization: Bearer"}, 400)
+    тело = {}
+    try:
+        тело = await request.json()
+    except Exception:
+        pass
+    key_id = str(тело.get("id") or "")
 
-    if TOKENS.revoke(token):
+    if key_id:
+        require_admin(request)
+        отозван = TOKENS.revoke_by_id(key_id)
+    else:
+        token = bearer(request)
+        if not token:
+            return JSONResponse(
+                {"error": "нужен либо свой ключ в Authorization, либо id ключа в теле"}, 400
+            )
+        отозван = TOKENS.revoke(token)
+
+    if отозван:
         return JSONResponse({"отозван": True, "действует": "сразу"})
     # не говорим, существовал ключ или нет: иначе это способ проверять чужие
     return JSONResponse({"отозван": False, "причина": "ключ неизвестен или уже отозван"}, 404)

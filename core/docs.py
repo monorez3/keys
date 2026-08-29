@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 
+import clientdoc
 import snippets
 from manifest import Manifest
 
@@ -133,10 +134,10 @@ def catalog_page(manifests: list[Manifest], base_url: str) -> str:
         "<h2>Ключ доступа и клиент</h2>"
         "<p>Как у любого ИИ-сервиса: получаете ключ, кладёте в <code>.env</code>, "
         "клиент подставляет его сам.</p>"
-        f"<pre>curl -X POST {html.escape(base_url)}/token</pre>"
         "<pre>pip install monokeys</pre>"
-        f"<p class=sub>Не хочется ставить пакет — тот же клиент одним файлом: "
-        f"<code>curl {html.escape(base_url)}/sdk/python &gt; monokeys.py</code></p>"
+        f"<p class=sub>Ключ доступа выдаёт владелец — он бессрочный и без счётчика. "
+        f"Не хочется ставить пакет: <code>curl {html.escape(base_url)}"
+        f"/sdk/python &gt; monokeys.py</code></p>"
         "<pre># .env\nKEYS_API_KEY=kx_…</pre>"
         "<pre>from monokeys import Keys\n\n"
         "k = Keys()                    # ключ берётся из KEYS_API_KEY\n"
@@ -145,17 +146,20 @@ def catalog_page(manifests: list[Manifest], base_url: str) -> str:
         "print(res.title)              # Pavel Durov</pre>"
         "<p class=sub>Методы клиента не зашиты в код — их список приходит с сервера. "
         "Появился новый ключ, и он сразу доступен, обновлять клиент не нужно. "
-        "Без ключа доступа тоже работает, просто лимит ниже.</p>"
+        "Без ключа доступа тоже работает, но как проба. "
+        "<a href='/client'>Все аргументы библиотеки →</a></p>"
         "<h2>Документация целиком</h2>"
         "<table>"
         "<tr><td><a href='/llms.txt'>/llms.txt</a></td>"
         "<td>все ключи одним простым текстом — удобно скормить ассистенту</td></tr>"
         "<tr><td><a href='/openapi.json'>/openapi.json</a></td>"
         "<td>машинная спека: по ней генератор соберёт клиент под ваш язык</td></tr>"
+        "<tr><td><a href='/client'>/client</a></td>"
+        "<td>документация по библиотеке: аргументы, методы, ошибки</td></tr>"
         "<tr><td><a href='/keys'>/keys</a></td><td>короткий список в JSON</td></tr>"
         "</table>"
-        "<footer>Бесплатно. Лимит — 60 запросов в минуту и 2000 в сутки на адрес; "
-        "ответы из кэша лимит не тратят.</footer>"
+        "<footer>Бесплатно. С ключом доступа запросы не считаются вовсе; "
+        "без ключа — небольшой запас на пробу.</footer>"
     )
     return _page("Ключи", body)
 
@@ -231,3 +235,77 @@ def key_page(m: Manifest, base_url: str) -> str:
 def not_found(available: list[str]) -> str:
     items = ", ".join(f"<code>{html.escape(k)}</code>" for k in available)
     return _page("Нет такого ключа", f"<h1>Нет такого ключа</h1><p>Есть: {items}</p>")
+
+
+def client_page(base_url: str) -> str:
+    """Документация по библиотеке: что за аргументы и что с ними делать."""
+    def таблица(заголовки, строки):
+        шапка = "".join(f"<th>{html.escape(h)}</th>" for h in заголовки)
+        тело = "".join(
+            "<tr>" + "".join(
+                f"<td><code>{html.escape(str(c))}</code></td>" if i == 0
+                else f"<td>{html.escape(str(c))}</td>"
+                for i, c in enumerate(строка)
+            ) + "</tr>"
+            for строка in строки
+        )
+        return f"<table><tr>{шапка}</tr>{тело}</table>"
+
+    body = (
+        "<p><a href='/'>← все ключи</a></p><h1>Библиотека monokeys</h1>"
+        "<p class=sub>Клиент одним файлом, без зависимостей. Ставить не обязательно: "
+        "ключ работает и обычной ссылкой.</p>"
+
+        "<h2>Поставить</h2>"
+        "<pre>pip install monokeys</pre>"
+        f"<p class=sub>Или тем же файлом: <code>curl {html.escape(base_url)}"
+        "/sdk/python &gt; monokeys.py</code></p>"
+
+        "<h2>Ключ доступа</h2>"
+        "<p>Ключ выдаёт владелец сервиса. Он <b>бессрочный и без счётчика</b>: "
+        "сколько запросов сделать — ваше дело, никто их не считает. Единственное, "
+        "что может случиться, — владелец отзовёт конкретный ключ, если тот начнёт "
+        "вредить. Без ключа всё тоже работает, но как проба.</p>"
+        "<pre># .env\nKEYS_API_KEY=kx_…</pre>"
+
+        "<h2>Три способа позвать</h2>"
+        "<pre>from monokeys import Keys\n\n"
+        "k = Keys()\n\n"
+        "k.alive(\"@durov\")                  # весь ответ: объект с полями\n"
+        "k.alive.members_count(\"@durov\")    # только одно поле, уже числом\n"
+        "k.alive.text(\"@durov\")             # строка для человека</pre>"
+
+        "<h2>Аргументы подключения</h2>"
+        + таблица(["аргумент", "по умолчанию", "что делает"], clientdoc.ПОДКЛЮЧЕНИЕ)
+        + "<pre>k = Keys(token=\"kx_…\", base=\"" + html.escape(base_url)
+        + "\", timeout=5, retries=2)</pre>"
+
+        "<h2>Аргументы вызова</h2>"
+        + таблица(["аргумент", "по умолчанию", "что делает"], clientdoc.ВЫЗОВ)
+        + "<pre>k.alive(\"@durov\", only=\"members_count\")   # 11005185\n"
+        "k.alive(\"@durov\", fmt=\"bool\")             # 'true'\n"
+        "k.alive(\"@durov\", timeout=3)              # не ждать дольше трёх секунд</pre>"
+
+        "<h2>Что можно спросить у клиента</h2>"
+        + таблица(["вызов", "что вернёт"], clientdoc.СПРОСИТЬ)
+
+        + "<h2>Ответ</h2>"
+        "<p>Ответ — это словарь, который умеет отвечать и как объект. "
+        "Опечатка в имени поля не молчит, а показывает список настоящих полей.</p>"
+        "<pre>res = k.alive(\"@durov\")\n"
+        "res.title == res[\"title\"]   # одно и то же\n"
+        "bool(res)                    # True, если ключ ответил утвердительно</pre>"
+
+        "<h2>Ошибки</h2>"
+        + таблица(["исключение", "когда"], clientdoc.ОШИБКИ)
+        + "<p class=sub>У всех есть <code>.status</code> и <code>.body</code>. "
+        "Первые две — потомки <code>KeysError</code>, ловятся одним except.</p>"
+
+        "<h2>Методы не зашиты в клиент</h2>"
+        "<p>Список ключей и их полей приходит с сервера, поэтому новый ключ "
+        "доступен сразу, без обновления пакета.</p>"
+        "<footer><a href='/'>каталог ключей</a> · "
+        "<a href='/llms.txt'>вся документация текстом</a> · "
+        "<a href='/openapi.json'>машинная спека</a></footer>"
+    )
+    return _page("Библиотека monokeys", body)

@@ -6,34 +6,60 @@
     # .env
     KEYS_API_KEY=kx_...
 
-    from keys import Keys
+    from monokeys import Keys
 
     k = Keys()                      # ключ берётся из KEYS_API_KEY
     res = k.alive("@durov")
 
     print(res.is_alive)             # True
     print(res.title)                # Pavel Durov
-    print(k.alive.text("@durov"))   # жив · channel · Pavel Durov · ...
+    print(k.alive.members_count("@durov"))   # 11005185, уже числом
+    print(k.alive.text("@durov"))            # жив · channel · Pavel Durov · ...
+
+Ключ доступа выдаёт владелец сервиса. Он бессрочный и без счётчика: сколько
+запросов сделать — ваше дело. Без ключа тоже работает, но как проба.
 
 Методы не перечислены в коде: их список приходит с сервера. Появился новый
 ключ — он сразу доступен, обновлять клиент не нужно.
+
+Все настройки — аргументы, ничего не прячется в глобальных переменных:
+
+    Keys(token=…, base=…, timeout=…, retries=…, user_agent=…)
+    k.alive(значение, only=…, fmt=…, timeout=…, **параметры)
+
+Полное описание аргументов — в docstring каждого метода и в README пакета.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 BASE = "http://127.0.0.1:8110"  # BASE-MARKER: подменяется при отдаче с сервера
+VERSION = "0.2.0"
 
-__all__ = ["Keys", "Answer", "KeysError"]
+__all__ = ["Keys", "Answer", "KeysError", "AccessDenied", "Unavailable"]
 
 
 class KeysError(RuntimeError):
-    """Сервер отказал: нет такого ключа, кончилась квота, мусор на входе."""
+    """Сервер отказал: нет такого ключа, мусор на входе, недоступен источник."""
+
+    def __init__(self, message: str, *, status: int | None = None, body: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+
+class AccessDenied(KeysError):
+    """Ключ доступа не подошёл: неизвестен, отозван или отправлен не по HTTPS."""
+
+
+class Unavailable(KeysError):
+    """Сервер сейчас занят или источник не ответил. Осмысленно повторить позже."""
 
 
 class Answer(dict):
@@ -61,6 +87,7 @@ class _Key:
         k.alive("@durov")                 -> весь ответ
         k.alive.members_count("@durov")   -> только число, уже числом
         k.alive.text("@durov")            -> одной строкой для человека
+        k.alive.fields()                  -> что этот ключ умеет вернуть
 
     Имена полей не зашиты: они приходят с сервера вместе со списком ключей,
     поэтому опечатка ловится сразу и с подсказкой, а не отдаёт молча None.
@@ -70,16 +97,31 @@ class _Key:
         self._keys = keys
         self._name = name
 
-    def __call__(self, value: str | None = None, **params) -> Answer:
-        return Answer(self._keys.call(self._name, value, fmt="json", **params))
+    def __call__(self, value: str | None = None, *, only: str = "",
+                 fmt: str = "json", timeout: float | None = None, **params):
+        """Позвать ключ.
 
-    def text(self, value: str | None = None, **params) -> str:
+        value    — главное значение (для alive это ссылка или @username);
+                   можно не давать, если передаёте параметры по именам.
+        only     — вернуть только это поле вместо всего ответа.
+        fmt      — 'json' (поля), 'text' (строка для человека), 'bool' (да/нет).
+        timeout  — сколько ждать ответа, секунд; по умолчанию как у клиента.
+        **params — остальные параметры ключа по именам.
+        """
+        ответ = self._keys.call(
+            self._name, value, fmt=fmt, only=only, timeout=timeout, **params
+        )
+        if only or fmt != "json":
+            return ответ.get(only) if isinstance(ответ, dict) and only else ответ
+        return Answer(ответ)
+
+    def text(self, value: str | None = None, *, timeout: float | None = None, **params) -> str:
         """Готовая человеческая строка вместо полей."""
-        return self._keys.call(self._name, value, fmt="text", **params)
+        return self._keys.call(self._name, value, fmt="text", timeout=timeout, **params)
 
     def fields(self) -> list[str]:
         """Что этот ключ вообще умеет вернуть."""
-        return self._keys._fields(self._name)
+        return self._keys.fields(self._name)
 
     def __getattr__(self, field: str):
         if field.startswith("_"):
@@ -90,9 +132,11 @@ class _Key:
                 f"у ключа '{self._name}' нет поля '{field}'; есть: {', '.join(known)}"
             )
 
-        def получить(value: str | None = None, **params):
-            answer = self._keys.call(self._name, value, fmt="json", only=field, **params)
-            return answer.get(field)
+        def получить(value: str | None = None, *, timeout: float | None = None, **params):
+            ответ = self._keys.call(
+                self._name, value, fmt="json", only=field, timeout=timeout, **params
+            )
+            return ответ.get(field)
 
         получить.__name__ = field
         получить.__doc__ = f"Только поле '{field}' ключа '{self._name}'."
@@ -106,52 +150,94 @@ class _Key:
 
 
 class Keys:
-    def __init__(self, token: str | None = None, base: str = BASE, timeout: float = 20.0) -> None:
-        self.token = token or os.environ.get("KEYS_API_KEY", "")
+    """Подключение к «Ключам».
+
+    token      — ключ доступа. По умолчанию берётся из переменной окружения
+                 KEYS_API_KEY. Без ключа всё работает как проба, с меньшим
+                 запасом; выданный ключ не имеет ни счётчика, ни срока.
+    base       — адрес сервера. По умолчанию тот, с которого скачан клиент.
+    timeout    — сколько ждать ответа, секунд. Можно переопределить в вызове.
+    retries    — сколько раз повторить при обрыве связи (не при отказе сервера:
+                 отказ повторять бессмысленно).
+    user_agent — как представляться; полезно, чтобы владелец сервиса видел,
+                 кто ходит.
+    """
+
+    def __init__(self, token: str | None = None, base: str = BASE, *,
+                 timeout: float = 20.0, retries: int = 1,
+                 user_agent: str = f"monokeys/{VERSION}") -> None:
+        self.token = token if token is not None else os.environ.get("KEYS_API_KEY", "")
         self.base = base.rstrip("/")
         self.timeout = timeout
+        self.retries = max(0, retries)
+        self.user_agent = user_agent
         self._catalog: dict | None = None
 
     # --- то, ради чего клиент существует ------------------------------- #
 
     def call(self, name: str, value: str | None = None, *, fmt: str = "json",
-             only: str = "", **params):
-        """Позвать ключ. value — главное значение, остальное по имени."""
-        query = dict(params)
+             only: str = "", timeout: float | None = None, **params):
+        """Позвать любой ключ по имени.
+
+        Возвращает словарь при fmt='json' и строку при fmt='text'/'bool'.
+        Обычно вызывают не это, а k.<имя ключа>(...) — но здесь ничего не
+        спрятано, и можно звать ключ, имя которого известно только в рантайме.
+        """
+        query = {k: v for k, v in params.items() if v is not None}
         query["fmt"] = fmt
         if only:
             query["only"] = only
-        url = f"{self.base}/{name}/"
+
+        url = f"{self.base}/{urllib.parse.quote(name)}/"
         if value is not None:
             url += urllib.parse.quote(str(value), safe="@+")
         url += "?" + urllib.parse.urlencode(query)
 
-        request = urllib.request.Request(url)
+        request = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
         if self.token:
+            # только заголовком: в query-строке ключ виден в логах и в истории
             request.add_header("Authorization", f"Bearer {self.token}")
 
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace").strip()
-            raise KeysError(f"{exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise KeysError(f"не дозвонился до {self.base}: {exc.reason}") from exc
-
+        body = self._open(request, timeout if timeout is not None else self.timeout)
         return json.loads(body) if fmt == "json" else body
 
-    def catalog(self) -> dict:
-        """Список ключей с описаниями — тем же клиентом, без браузера."""
-        if self._catalog is None:
-            with urllib.request.urlopen(f"{self.base}/keys", timeout=self.timeout) as response:
-                self._catalog = json.load(response)
+    def _open(self, request, timeout: float) -> str:
+        последняя: Exception | None = None
+        for попытка in range(self.retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace").strip()
+                if exc.code in (401, 403):
+                    raise AccessDenied(f"{exc.code}: {detail}", status=exc.code,
+                                       body=detail) from exc
+                if exc.code in (502, 503):
+                    raise Unavailable(f"{exc.code}: {detail}", status=exc.code,
+                                      body=detail) from exc
+                raise KeysError(f"{exc.code}: {detail}", status=exc.code, body=detail) from exc
+            except urllib.error.URLError as exc:
+                последняя = exc
+                if попытка < self.retries:
+                    time.sleep(0.3)
+        raise Unavailable(f"не дозвонился до {self.base}: {последняя}")
+
+    # --- что вообще есть на сервере -------------------------------------- #
+
+    def catalog(self, *, refresh: bool = False) -> dict:
+        """Список ключей с описаниями. refresh=True — спросить заново."""
+        if self._catalog is None or refresh:
+            request = urllib.request.Request(
+                f"{self.base}/keys", headers={"User-Agent": self.user_agent}
+            )
+            self._catalog = json.loads(self._open(request, self.timeout))
         return self._catalog
 
     def names(self) -> list[str]:
+        """Имена всех доступных ключей."""
         return [k["id"] for k in self.catalog()["keys"]]
 
-    def _fields(self, name: str) -> list[str]:
+    def fields(self, name: str) -> list[str]:
         """Поля ответа конкретного ключа — из того же каталога."""
         for key in self.catalog()["keys"]:
             if key["id"] == name:
@@ -166,9 +252,7 @@ class Keys:
         except KeysError:
             available = []  # сервер молчит — пусть падает уже на самом вызове
         if available and name not in available:
-            raise AttributeError(
-                f"ключа '{name}' нет; есть: {', '.join(available)}"
-            )
+            raise AttributeError(f"ключа '{name}' нет; есть: {', '.join(available)}")
         return _Key(self, name)
 
     def __dir__(self):
@@ -176,3 +260,7 @@ class Keys:
             return list(super().__dir__()) + self.names()
         except KeysError:
             return list(super().__dir__())
+
+    def __repr__(self) -> str:
+        с_ключом = "с ключом доступа" if self.token else "без ключа (проба)"
+        return f"<Keys {self.base}, {с_ключом}>"
