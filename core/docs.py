@@ -48,6 +48,39 @@ footer { margin-top:48px; color:var(--muted); font-size:13px; }
        border-radius:99px; }
 .tabs button[aria-selected=true] { color:var(--fg); border-color:var(--accent); }
 .snippet[hidden] { display:none; }
+.keyline { display:flex; align-items:center; gap:10px; background:var(--card);
+       border:1px solid var(--accent); border-radius:12px; padding:14px 16px; margin:6px 0 4px; }
+.keyline code { font-size:15px; word-break:break-all; }
+.try { display:flex; gap:8px; margin:10px 0 4px; }
+.try input { flex:1; min-width:0; font:inherit; font-size:14px; padding:9px 12px;
+       background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:10px; }
+.try button { font:inherit; font-size:14px; padding:9px 18px; cursor:pointer;
+       background:var(--accent); color:#fff; border:0; border-radius:10px; }
+#answer { margin:4px 0 0; padding:12px 16px; background:var(--card);
+       border:1px solid var(--line); border-radius:10px; font-size:15px; }
+#answer[hidden] { display:none; }
+"""
+
+TRY_JS = """
+const form = document.querySelector('.try');
+if (form) {
+  const field = form.querySelector('input');
+  const out = document.getElementById('answer');
+  const ask = async () => {
+    const value = field.value.trim();
+    if (!value) { field.focus(); return; }
+    out.hidden = false;
+    out.textContent = 'спрашиваю…';
+    try {
+      const r = await fetch(form.dataset.key + encodeURIComponent(value));
+      out.textContent = await r.text();
+    } catch (e) {
+      out.textContent = 'не дозвонился: ' + e.message;
+    }
+  };
+  form.querySelector('button').addEventListener('click', ask);
+  field.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+}
 """
 
 TABS_JS = """
@@ -141,17 +174,34 @@ def key_page(m: Manifest, base_url: str) -> str:
         note = m.source.get("note", "")
         source = f"<h2>Откуда</h2><p class=sub>{html.escape(src)} — {html.escape(note)}</p>"
 
+    key_link = snippets.key_link(m, base_url)
+    primary = m.primary_param()
+    example_value = snippets.example_params(m).get(primary.name, "")
+
     body = (
         f"<p><a href='/'>← все ключи</a></p><h1>{html.escape(m.title)}</h1>"
         f"<p class=sub>{html.escape(m.summary)}</p>"
+        "<h2>Ключ</h2>"
+        "<p class=sub>Вставьте куда угодно и допишите в конец то, что проверяете.</p>"
+        f"<div class=keyline><code>{html.escape(key_link)}</code></div>"
+        f"<p class=sub>{html.escape(primary.description)}</p>"
+        "<h2>Попробовать прямо тут</h2>"
+        f"<div class=try data-key='{html.escape(key_link)}'>"
+        f"<input value='{html.escape(str(example_value))}' "
+        f"placeholder='{html.escape(str(primary.example or ''))}'>"
+        "<button type=button>Проверить</button></div>"
+        "<p id=answer hidden></p>"
         f"<p>{html.escape(m.description)}</p>"
         "<h2>Вход</h2><table><tr><th>параметр</th><th>тип</th><th>что это</th></tr>"
         f"{params}</table>"
         "<h2>Ответ</h2><table><tr><th>поле</th><th>тип</th><th>что это</th></tr>"
         f"{returns}</table>"
         "<h2>Позвать из кода</h2>"
-        "<p class=sub>Ставить нечего: везде, кроме C++, хватает стандартной библиотеки.</p>"
+        "<p class=sub>Ставить нечего: везде, кроме C++, хватает стандартной "
+        "библиотеки. Ответ приходит готовой строкой — разбирать нечего.</p>"
         f"<div class=tabs>{tabs}</div>{blocks}"
+        f"<p class=sub>Нужен полный ответ полями — допишите <code>?fmt=json</code>, "
+        f"нужно только да/нет — <code>?fmt=bool</code>.</p>"
         "<h2>В ассистенте</h2>"
         f"<p>Инструмент называется <code>{html.escape(m.id)}</code> — просто попросите словами, "
         "подставлять параметры ассистент будет сам.</p>"
@@ -159,7 +209,7 @@ def key_page(m: Manifest, base_url: str) -> str:
         "<footer><a href='/llms.txt'>вся документация одним текстом</a> · "
         "<a href='/openapi.json'>машинная спека</a></footer>"
     )
-    return _page(m.title, body, TABS_JS)
+    return _page(m.title, body, TABS_JS + TRY_JS)
 
 
 def not_found(available: list[str]) -> str:

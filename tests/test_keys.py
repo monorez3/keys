@@ -185,3 +185,37 @@ def test_llms_txt_содержит_все_ключи():
         assert m.id in text and m.summary in text
         for p in m.params:
             assert p.name in text
+
+
+# --- короткая форма: имя ключа + строка ------------------------------------- #
+
+def test_первичный_параметр_существует():
+    for m in all_manifests():
+        assert m.primary_param().name in {p.name for p in m.params}
+
+
+def test_ответ_приходит_человеческой_строкой():
+    m = all_manifests()[0]
+    живой = m.short_text(
+        {"is_alive": True, "kind": "channel", "title": "Pavel Durov", "members_count": 11005185}
+    )
+    assert живой.startswith("жив")
+    assert "11 005 185" in живой, "число для человека разбивается пробелами"
+    assert m.short_text({"is_alive": False, "error": "нет такого"}).startswith("мёртв")
+
+
+def test_пустое_поле_не_оставляет_хвоста():
+    """У бота нет подписчиков — кусок шаблона должен исчезнуть целиком."""
+    m = all_manifests()[0]
+    ответ = m.short_text({"is_alive": True, "kind": "bot", "title": "BotFather", "members_count": None})
+    assert "подписчиков" not in ответ
+    assert "··" not in ответ and not ответ.rstrip().endswith("·")
+
+
+def test_примеры_используют_короткую_форму():
+    """Ни в одном примере не должно остаться сборки query-строки."""
+    for m in all_manifests():
+        link = snippets.key_link(m, BASE)
+        for lang, text in snippets.render(m, BASE).items():
+            assert link in text, f"{m.id}/{lang}: пример не через короткую форму"
+            assert "urlencode" not in text and "URLSearchParams" not in text, f"{m.id}/{lang}"

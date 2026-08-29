@@ -13,7 +13,12 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "core"))
@@ -152,10 +157,29 @@ async def list_keys() -> dict:
     }
 
 
+def respond(key_id: str, status: int, body: dict, fmt: str):
+    """Один результат — три формы ответа.
+
+    fmt=text отдаёт готовую строку для человека. Это не украшение: в C++, PHP,
+    шелле и ячейке таблицы разобрать JSON дороже, чем сделать сам запрос.
+    """
+    key = KEYS.get(key_id)
+    if fmt == "json" or key is None:
+        return JSONResponse(body, status_code=status)
+    if status >= 400:
+        return PlainTextResponse(body.get("error", "ошибка"), status_code=status)
+    if fmt == "bool":
+        field = key.manifest.short.get("field")
+        return PlainTextResponse(str(bool(body.get(field))).lower(), status_code=status)
+    return PlainTextResponse(key.manifest.short_text(body), status_code=status)
+
+
 @app.get("/k/{key_id}")
-async def run_get(key_id: str, request: Request) -> JSONResponse:
-    status, body = await call_key(key_id, dict(request.query_params), client_id(request))
-    return JSONResponse(body, status_code=status)
+async def run_get(key_id: str, request: Request):
+    params = dict(request.query_params)
+    fmt = params.pop("fmt", "json")
+    status, body = await call_key(key_id, params, client_id(request))
+    return respond(key_id, status, body, fmt)
 
 
 @app.post("/k/{key_id}")
@@ -231,3 +255,34 @@ async def mcp(request: Request):
         )
 
     return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
+
+# --------------------------------------------------------------------------- #
+# короткая форма: /<ключ>/<строка>
+#
+# Регистрируется последней — все точные маршруты выше уже разобраны, поэтому
+# /keys, /health и /llms.txt сюда не проваливаются. Смысл в том, чтобы человек
+# ничего не собирал: имя ключа, слэш, то что проверяем. Ссылку можно вставить
+# куда угодно — в код, в браузер, в ячейку таблицы.
+# --------------------------------------------------------------------------- #
+
+@app.get("/{key_id}")
+async def key_root(key_id: str):
+    """Голое имя ключа — показываем, что он умеет."""
+    if key_id not in KEYS:
+        return JSONResponse({"error": f"ключа '{key_id}' нет", "keys": sorted(KEYS)}, 404)
+    return RedirectResponse(f"/k/{key_id}/docs")
+
+
+@app.get("/{key_id}/{value:path}")
+async def run_short(key_id: str, value: str, request: Request):
+    key = KEYS.get(key_id)
+    if key is None:
+        return JSONResponse({"error": f"ключа '{key_id}' нет", "keys": sorted(KEYS)}, 404)
+
+    params = dict(request.query_params)
+    fmt = params.pop("fmt", "text")  # короткая форма по умолчанию отвечает строкой
+    params[key.manifest.primary_param().name] = value
+
+    status, body = await call_key(key_id, params, client_id(request))
+    return respond(key_id, status, body, fmt)

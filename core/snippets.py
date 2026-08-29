@@ -1,17 +1,17 @@
 """Готовый код под каждый язык — тоже из манифеста, а не руками.
 
-Смысл ключа в том, что подключать нечего: это обычный HTTP-запрос, который
-умеет любой язык без единой зависимости. Поэтому примеры ниже намеренно
-написаны на голой стандартной библиотеке — кроме C++, где без libcurl никуда.
+Задача не «показать пример HTTP-запроса», а свести код на стороне человека к
+одной строке. Поэтому примеры используют короткую форму — имя ключа и сразу
+значение — и просят текстовый ответ. Тогда на стороне человека не остаётся ни
+сборки query-строки, ни разбора JSON: только «сходи по адресу и напечатай».
 
-Правило: добавили ключ — примеры под все языки появились сами, с настоящими
-именами параметров и настоящими значениями из manifest.examples.
+Правило: добавили ключ — примеры под все языки появились сами, с настоящим
+адресом и настоящим значением из manifest.examples.
 """
 
 from __future__ import annotations
 
-import json
-from urllib.parse import urlencode
+from urllib.parse import quote
 
 from manifest import Manifest
 
@@ -31,43 +31,31 @@ def example_params(m: Manifest) -> dict:
     """Настоящие значения: из примера манифеста, иначе из полей params."""
     if m.examples:
         return dict(m.examples[0]["params"])
-    return {p.name: p.example if p.example is not None else "..." for p in m.params}
+    return {p.name: p.example if p.example is not None else "нет-примера" for p in m.params}
 
 
-def _main_field(m: Manifest) -> str:
-    """Поле, которое интереснее всего напечатать в примере."""
-    return m.returns[0].name if m.returns else "result"
+def key_link(m: Manifest, base_url: str) -> str:
+    """Сам ключ: адрес, к которому дописывают проверяемое значение."""
+    return f"{base_url}/{m.id}/"
+
+
+def example_link(m: Manifest, base_url: str) -> str:
+    value = example_params(m).get(m.primary_param().name, "")
+    return key_link(m, base_url) + quote(str(value), safe="@+")
 
 
 def render(m: Manifest, base_url: str) -> dict[str, str]:
-    params = example_params(m)
-    url = f"{base_url}/k/{m.id}?{urlencode(params)}"
-    field = _main_field(m)
-    py_args = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in params.items())
-    js_args = json.dumps(params, ensure_ascii=False)
-    php_args = ", ".join(
-        f'"{k}" => {json.dumps(v, ensure_ascii=False)}' for k, v in params.items()
-    )
+    url = example_link(m, base_url)
 
     return {
         "curl": f"curl '{url}'",
 
-        "python": f'''import json, urllib.parse, urllib.request
+        "python": f'''import urllib.request
 
-def key(name, **params):
-    """Любой ключ. Ни одной зависимости — только стандартная библиотека."""
-    url = "{base_url}/k/" + name + "?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url, timeout=20) as r:
-        return json.load(r)
+print(urllib.request.urlopen("{url}").read().decode())''',
 
-res = key("{m.id}", {py_args})
-print(res["{field}"])''',
-
-        "javascript": f'''const res = await fetch(
-  "{base_url}/k/{m.id}?" + new URLSearchParams({js_args})
-).then(r => r.json());
-
-console.log(res.{field});''',
+        "javascript": f'''const answer = await (await fetch("{url}")).text();
+console.log(answer);''',
 
         "cpp": f'''// сборка: g++ main.cpp -lcurl
 #include <curl/curl.h>
@@ -79,34 +67,23 @@ static size_t sink(char* data, size_t size, size_t n, void* out) {{
     return size * n;
 }}
 
-std::string key(const std::string& url) {{
+int main() {{
     CURL* curl = curl_easy_init();
-    std::string body;
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    std::string answer;
+    curl_easy_setopt(curl, CURLOPT_URL, "{url}");
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, sink);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &answer);
     curl_easy_perform(curl);
     curl_easy_cleanup(curl);
-    return body;  // JSON строкой; разбирать — nlohmann/json по вкусу
-}}
 
-int main() {{
-    std::cout << key("{url}") << std::endl;
+    std::cout << answer << std::endl;  // готовая строка, разбирать нечего
 }}''',
 
-        "go": f'''resp, err := http.Get("{url}")
-if err != nil {{
-    log.Fatal(err)
-}}
+        "go": f'''resp, _ := http.Get("{url}")
 defer resp.Body.Close()
+answer, _ := io.ReadAll(resp.Body)
 
-var res map[string]any
-json.NewDecoder(resp.Body).Decode(&res)
-fmt.Println(res["{field}"])''',
+fmt.Println(string(answer))''',
 
-        "php": f'''$url = "{base_url}/k/{m.id}?" . http_build_query([{php_args}]);
-$res = json_decode(file_get_contents($url), true);
-
-echo $res["{field}"];''',
+        "php": f'echo file_get_contents("{url}");',
     }

@@ -8,6 +8,7 @@ HTTP-эндпоинт, инструмент MCP и страница докуме
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,7 +57,33 @@ class Manifest:
     cache_ttl: dict = field(default_factory=dict)
     cost: str = "cpu"
     examples: list[dict] = field(default_factory=list)
+    primary: str = ""
+    short: dict = field(default_factory=dict)
     path: Path | None = None
+
+    # --- короткая форма: имя ключа + одна строка ------------------------- #
+
+    def primary_param(self) -> Param:
+        """Параметр, который подставляется в короткую форму /alive/<строка>.
+
+        Ради него всё и затевалось: человек не должен собирать query-строку,
+        он вставляет ссылку сразу в адрес.
+        """
+        for p in self.params:
+            if p.name == self.primary:
+                return p
+        return self.params[0]
+
+    def short_text(self, result: dict) -> str:
+        """Человеческий однострочный ответ вместо JSON.
+
+        Нужен там, где разбирать JSON дороже, чем сделать сам запрос:
+        C++, PHP, шелл, ячейка таблицы.
+        """
+        if not self.short:
+            return json.dumps(result, ensure_ascii=False)
+        template = self.short["yes"] if result.get(self.short["field"]) else self.short["no"]
+        return _fill(template, result)
 
     # --- то, ради чего всё затевалось: два лица из одних данных ---------- #
 
@@ -85,6 +112,28 @@ class Manifest:
     def ttl_for(self, alive: bool) -> int:
         """Мёртвое кэшируем короче: канал может воскреснуть, живой — вряд ли исчезнет."""
         return int(self.cache_ttl.get("alive" if alive else "dead", 3600))
+
+
+def _fill(template: str, values: dict) -> str:
+    """'{title} · {members_count}' -> 'Pavel Durov · 11 005 185'.
+
+    Пустые поля выбрасываем вместе с разделителем: строка «жив · · ·» хуже,
+    чем просто «жив». Числа разбиваем пробелами — это ответ для человека.
+    """
+    parts = []
+    for chunk in template.split("·"):
+        text = chunk.strip()
+        names = re.findall(r"\{(\w+)\}", text)
+        if any(values.get(n) in (None, "") for n in names):
+            continue  # кусок опирается на пустое поле — целиком выкидываем
+        for name in names:
+            value = values[name]
+            if isinstance(value, int) and not isinstance(value, bool):
+                value = f"{value:,}".replace(",", " ")
+            text = text.replace("{" + name + "}", str(value))
+        if text:
+            parts.append(text)
+    return " · ".join(parts)
 
 
 def _need(raw: dict, field_name: str, kind: type, where: str):
@@ -139,5 +188,7 @@ def load(path: Path) -> Manifest:
         cache_ttl=raw.get("cache_ttl", {}),
         cost=raw.get("cost", "cpu"),
         examples=raw.get("examples", []),
+        primary=raw.get("primary", ""),
+        short=raw.get("short", {}),
         path=path.parent,
     )

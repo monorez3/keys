@@ -23,6 +23,12 @@
     {"name": "avatar_url", "type": "string", "description": "прямая ссылка на аватарку"},
     {"name": "error", "type": "string", "description": "почему не жив, если не жив"}
   ],
+  "primary": "link",
+  "short": {
+    "field": "is_alive",
+    "yes": "жив · {kind} · {title} · {members_count} подписчиков",
+    "no": "мёртв · {error}"
+  },
   "cache_ttl": {"alive": 21600, "dead": 3600},
   "cost": "network",
   "examples": [
