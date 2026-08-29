@@ -134,3 +134,54 @@ def test_разные_клиенты_не_мешают_друг_другу():
     q.spend("a")
     assert q.check("a")[0] is False
     assert q.check("b")[0] is True
+
+
+# --- примеры кода и машинные описания -------------------------------------- #
+
+import snippets  # noqa: E402
+import spec      # noqa: E402
+
+BASE = "https://example.test"
+
+
+def all_manifests():
+    return [k.manifest for k in discover(ROOT / "keys").values()]
+
+
+def test_примеры_есть_для_всех_языков():
+    for m in all_manifests():
+        code = snippets.render(m, BASE)
+        assert set(code) == set(snippets.LANGS)
+        for lang, text in code.items():
+            assert BASE in text, f"{m.id}/{lang}: пример без адреса, копировать нечего"
+            assert m.id in text
+
+
+def test_в_примерах_нет_заглушек():
+    """Копипаста должна работать как есть — 'ВАШ-АДРЕС' подставлять никто не будет."""
+    for m in all_manifests():
+        for lang, text in snippets.render(m, BASE).items():
+            assert "ВАШ-АДРЕС" not in text, f"{m.id}/{lang}"
+            assert "..." not in text, f"{m.id}/{lang}: параметр без примера в манифесте"
+
+
+def test_питоновский_пример_компилируется():
+    for m in all_manifests():
+        compile(snippets.render(m, BASE)["python"], f"<{m.id}>", "exec")
+
+
+def test_openapi_описывает_каждый_ключ():
+    doc = spec.openapi(all_manifests(), BASE)
+    assert doc["openapi"].startswith("3.")
+    for m in all_manifests():
+        op = doc["paths"][f"/k/{m.id}"]["get"]
+        assert op["operationId"] == m.id
+        assert {p["name"] for p in op["parameters"]} == {p.name for p in m.params}
+
+
+def test_llms_txt_содержит_все_ключи():
+    text = spec.llms_txt(all_manifests(), BASE)
+    for m in all_manifests():
+        assert m.id in text and m.summary in text
+        for p in m.params:
+            assert p.name in text

@@ -13,12 +13,13 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "core"))
 
 import docs                                    # noqa: E402
+import spec                                    # noqa: E402
 from limits import Quota                       # noqa: E402
 from manifest import Manifest                  # noqa: E402
 from registry import discover                  # noqa: E402
@@ -33,7 +34,9 @@ from runtime import (                          # noqa: E402
 
 MCP_PROTOCOL = "2025-06-18"
 
-app = FastAPI(title="Ключи", docs_url=None, redoc_url=None)
+# openapi_url=None — путь /openapi.json занимаем сами: спеку собираем из
+# манифестов, а не из питоновских сигнатур (маршруты у нас динамические).
+app = FastAPI(title="Ключи", docs_url=None, redoc_url=None, openapi_url=None)
 
 KEYS = discover(ROOT / "keys")
 CACHE = Cache(ROOT / "cache.db")
@@ -96,17 +99,40 @@ async def call_key(key_id: str, params: dict, who: str) -> tuple[int, dict]:
 # лицо 1: HTTP
 # --------------------------------------------------------------------------- #
 
+def base_url(request: Request) -> str:
+    """Адрес, на который человек реально пришёл: локально одно, в проде другое.
+
+    Так примеры кода на странице всегда рабочие — их можно копировать как есть,
+    ничего не подставляя руками.
+    """
+    return str(request.base_url).rstrip("/")
+
+
+def manifests() -> list[Manifest]:
+    return [k.manifest for k in KEYS.values()]
+
+
 @app.get("/", response_class=HTMLResponse)
-async def catalog() -> str:
-    return docs.catalog_page([k.manifest for k in KEYS.values()])
+async def catalog(request: Request) -> str:
+    return docs.catalog_page(manifests(), base_url(request))
 
 
 @app.get("/k/{key_id}/docs", response_class=HTMLResponse)
-async def key_docs(key_id: str) -> str:
+async def key_docs(key_id: str, request: Request) -> str:
     key = KEYS.get(key_id)
     if key is None:
         return docs.not_found(sorted(KEYS))
-    return docs.key_page(key.manifest)
+    return docs.key_page(key.manifest, base_url(request))
+
+
+@app.get("/openapi.json")
+async def openapi_spec(request: Request) -> dict:
+    return spec.openapi(manifests(), base_url(request))
+
+
+@app.get("/llms.txt", response_class=PlainTextResponse)
+async def llms_txt(request: Request) -> str:
+    return spec.llms_txt(manifests(), base_url(request))
 
 
 @app.get("/keys")
