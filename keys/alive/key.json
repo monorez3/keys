@@ -1,0 +1,33 @@
+{
+  "id": "alive",
+  "title": "Жив ли канал",
+  "summary": "Проверяет ссылку Telegram без аккаунта, без Bot API и без токена.",
+  "description": "Читает публичную превью-страницу t.me — ту самую, которую Telegram отдаёт мессенджерам для картинки ссылки. Отвечает, существует ли канал/группа/бот/аккаунт, и заодно отдаёт название, описание, число подписчиков и аватарку. Мёртвые и заблокированные страницы отличаются от живых по разметке, а не по коду ответа: Telegram на удалённый канал возвращает 200 и заглушку.",
+  "tags": ["telegram", "проверка", "без-аккаунта"],
+  "source": {"project": "TG Catalog", "note": "логика разбора вырезана из checker.py"},
+  "params": [
+    {
+      "name": "link",
+      "type": "string",
+      "required": true,
+      "description": "@username, ссылка t.me/... или приватный инвайт +hash",
+      "example": "durov"
+    }
+  ],
+  "returns": [
+    {"name": "is_alive", "type": "boolean", "description": "существует ли страница"},
+    {"name": "kind", "type": "string", "description": "channel | group | bot | user | private_invite | unknown"},
+    {"name": "title", "type": "string", "description": "название"},
+    {"name": "description", "type": "string", "description": "описание из шапки"},
+    {"name": "members_count", "type": "integer", "description": "подписчиков или участников"},
+    {"name": "avatar_url", "type": "string", "description": "прямая ссылка на аватарку"},
+    {"name": "error", "type": "string", "description": "почему не жив, если не жив"}
+  ],
+  "cache_ttl": {"alive": 21600, "dead": 3600},
+  "cost": "network",
+  "examples": [
+    {"params": {"link": "durov"}, "note": "живой канал с 11 млн подписчиков"},
+    {"params": {"link": "@BotFather"}, "note": "бот"},
+    {"params": {"link": "nonexistentchannel12345xyz"}, "note": "заглушка — is_alive: false"}
+  ]
+}
