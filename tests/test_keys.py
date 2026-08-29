@@ -197,7 +197,13 @@ def test_первичный_параметр_существует():
 def test_ответ_приходит_человеческой_строкой():
     m = all_manifests()[0]
     живой = m.short_text(
-        {"is_alive": True, "kind": "channel", "title": "Pavel Durov", "members_count": 11005185}
+        {
+            "is_alive": True,
+            "kind": "channel",
+            "title": "Pavel Durov",
+            "members_count": 11005185,
+            "members_label": "subscribers",
+        }
     )
     assert живой.startswith("жив")
     assert "11 005 185" in живой, "число для человека разбивается пробелами"
@@ -297,3 +303,84 @@ def test_ответ_клиента_ведёт_себя_как_объект_и_к
     assert bool(client_lib.Answer({"is_alive": False})) is False
     with pytest.raises(AttributeError):
         res.нет_такого_поля
+
+
+# --- полный разбор страницы ------------------------------------------------- #
+
+def test_группа_отдаёт_участников_и_онлайн():
+    res = handler.parse_preview(fixture("group.html"), "ru_python", "https://t.me/ru_python")
+    assert res["kind"] == "group"
+    assert res["members_label"] == "members"
+    assert res["members_count"] > 1000
+    assert res["online_count"] > 0
+
+
+def test_у_бота_счётчик_называется_иначе():
+    """У бота число лежит во ВТОРОМ блоке extra — первый занят под @username."""
+    res = handler.parse_preview(fixture("bot.html"), "BotFather", "https://t.me/BotFather")
+    assert res["kind"] == "bot"
+    assert res["members_label"] == "monthly users"
+    assert res["members_count"] > 1_000_000
+
+
+def test_галочка_верификации_видна():
+    channel = handler.parse_preview(fixture("alive_channel.html"), "durov", "u")
+    group = handler.parse_preview(fixture("group.html"), "ru_python", "u")
+    assert channel["verified"] is True
+    assert group["verified"] is False
+
+
+def test_спрятанный_счётчик_не_ломает_тип():
+    """«no subscribers» — числа нет, но что это канал, всё равно понятно."""
+    res = handler.parse_preview(fixture("hidden_count.html"), "python_beginners_chat", "u")
+    assert res["kind"] == "channel"
+    assert res["members_label"] == "subscribers"
+    assert res["members_count"] is None
+
+
+def test_есть_прямая_ссылка_в_приложение():
+    res = handler.parse_preview(fixture("alive_channel.html"), "durov", "u")
+    assert res["deep_link"] == "tg://resolve?domain=durov"
+    assert res["has_preview"] is True
+    assert res["action"] == "View in Telegram"
+
+
+def test_приватный_инвайт_помечается():
+    res = handler.parse_preview("", "+AbCdEf", "https://t.me/+AbCdEf", status=404)
+    assert res["is_private"] is True
+
+
+def test_манифест_описывает_все_поля_ответа():
+    """Иначе only= и клиент не дадут забрать поле, которое ключ реально отдаёт."""
+    res = handler.parse_preview(fixture("alive_channel.html"), "durov", "https://t.me/durov")
+    описано = {r.name for r in all_manifests()[0].returns}
+    assert set(res) <= описано, f"не описаны в манифесте: {set(res) - описано}"
+
+
+def test_клиент_просит_одно_поле(monkeypatch):
+    """k.alive.members_count(...) должен уходить с only= и возвращать значение."""
+    отправлено = {}
+
+    class FakeResponse:
+        def read(self):
+            return b'{"members_count": 11005185}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        отправлено["url"] = request.full_url
+        return FakeResponse()
+
+    k = client_lib.Keys(base="https://example.test")
+    k._catalog = {"keys": [{"id": "alive", "returns": ["members_count", "kind"]}]}
+    monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
+
+    assert k.alive.members_count("@durov") == 11005185
+    assert "only=members_count" in отправлено["url"]
+
+    with pytest.raises(AttributeError, match="нет поля"):
+        k.alive.members_cout("@durov")

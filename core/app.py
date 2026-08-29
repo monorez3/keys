@@ -177,6 +177,7 @@ async def list_keys() -> dict:
                 "summary": m.summary,
                 "tags": m.tags,
                 "params": [p.name for p in m.params],
+                "returns": [r.name for r in m.returns],
                 "docs": f"/k/{m.id}/docs",
             }
             for m in (k.manifest for k in KEYS.values())
@@ -184,14 +185,33 @@ async def list_keys() -> dict:
     }
 
 
-def respond(key_id: str, status: int, body: dict, fmt: str):
-    """Один результат — три формы ответа.
+def respond(key_id: str, status: int, body: dict, fmt: str, only: str = ""):
+    """Один результат — несколько форм ответа.
 
-    fmt=text отдаёт готовую строку для человека. Это не украшение: в C++, PHP,
-    шелле и ячейке таблицы разобрать JSON дороже, чем сделать сам запрос.
+    only=<поле> отдаёт ровно одно значение и ничего вокруг: чаще всего нужен
+    не весь ответ, а число подписчиков. Имя поля сверяется с манифестом, иначе
+    опечатка возвращала бы пустоту, которую легко принять за ноль.
     """
     key = KEYS.get(key_id)
-    if fmt == "json" or key is None:
+    if key is None:
+        return JSONResponse(body, status_code=status)
+
+    if only:
+        known = {r.name for r in key.manifest.returns}
+        if only not in known:
+            return respond(
+                key_id, 400,
+                {"error": f"поля '{only}' у ключа нет", "поля": sorted(known)},
+                "json",
+            )
+        if status >= 400:
+            return PlainTextResponse(body.get("error", "ошибка"), status_code=status)
+        value = body.get(only)
+        if fmt == "json":
+            return JSONResponse({only: value}, status_code=status)
+        return PlainTextResponse("" if value is None else str(value), status_code=status)
+
+    if fmt == "json":
         return JSONResponse(body, status_code=status)
     if status >= 400:
         return PlainTextResponse(body.get("error", "ошибка"), status_code=status)
@@ -205,9 +225,10 @@ def respond(key_id: str, status: int, body: dict, fmt: str):
 async def run_get(key_id: str, request: Request):
     params = dict(request.query_params)
     fmt = params.pop("fmt", "json")
+    only = params.pop("only", "")
     params.pop("token", None)
     status, body = await call_key(key_id, params, *caller(request))
-    return respond(key_id, status, body, fmt)
+    return respond(key_id, status, body, fmt, only)
 
 
 @app.post("/k/{key_id}")
@@ -349,8 +370,9 @@ async def run_short(key_id: str, value: str, request: Request):
 
     params = dict(request.query_params)
     fmt = params.pop("fmt", "text")  # короткая форма по умолчанию отвечает строкой
+    only = params.pop("only", "")
     params.pop("token", None)
     params[key.manifest.primary_param().name] = value
 
     status, body = await call_key(key_id, params, *caller(request))
-    return respond(key_id, status, body, fmt)
+    return respond(key_id, status, body, fmt, only)

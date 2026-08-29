@@ -1,4 +1,4 @@
-"""Ключ «жив ли канал»: t.me/<username> -> живой/мёртвый + карточка.
+"""Ключ «жив ли канал»: t.me/<username> -> всё, что вообще есть на странице.
 
 Разбор вырезан из TG Catalog (checker.py) и оставлен чистой функцией:
 parse_preview(html) не ходит в сеть, поэтому тестируется без интернета.
@@ -6,6 +6,19 @@ parse_preview(html) не ходит в сеть, поэтому тестируе
 Главная тонкость, из-за которой наивная проверка врёт: Telegram на удалённый
 канал отвечает 200 и рисует заглушку. Отличие живого от мёртвого — в разметке,
 а не в коде ответа.
+
+Что страница отдаёт на самом деле (проверено на живых страницах):
+
+    <div class="tgme_page_title"><span>Имя</span><i class="verified-icon">✔</i></div>
+    <div class="tgme_page_extra">11 005 186 subscribers</div>      -> канал
+    <div class="tgme_page_extra">15 121 members, 3 314 online</div> -> группа
+    <div class="tgme_page_extra">@BotFather</div>                   -> и следом
+    <div class="tgme_page_extra">8 705 765 monthly users</div>      -> бот
+    <a class="tgme_action_button_new" href="tg://resolve?domain=…">View in Telegram</a>
+    <a class="tgme_page_context_link" href="/s/durov">Preview channel</a>
+
+Блоков tgme_page_extra бывает два, и у бота число лежит во втором — поэтому
+их разбирают все, а не первый попавшийся.
 """
 
 from __future__ import annotations
@@ -18,9 +31,13 @@ EXTRA_RE = re.compile(r'<div class="tgme_page_extra"[^>]*>(.*?)</div>', re.S)
 DESC_RE = re.compile(r'<div class="tgme_page_description[^"]*"[^>]*>(.*?)</div>', re.S)
 PHOTO_RE = re.compile(r'<img class="tgme_page_photo_image"[^>]*src="([^"]+)"')
 ICON_RE = re.compile(r'class="tgme_page_icon"')
-TAG_RE = re.compile(r"<[^>]+>")
+ACTION_RE = re.compile(r'<a class="tgme_action_button_new[^"]*"[^>]*>(.*?)</a>', re.S)
+DEEPLINK_RE = re.compile(r'href="(tg://[^"]+)"')
+PREVIEW_RE = re.compile(r'<a class="tgme_page_context_link"[^>]*href="(/s/[^"]+)"')
 VERIFIED_RE = re.compile(r'<i class="verified-icon".*?</i>', re.S)
-NUM_RE = re.compile(r"^([\d\s  ]+)")
+TAG_RE = re.compile(r"<[^>]+>")
+COUNT_RE = re.compile(r"([\d\s  ]+)\s*([a-zA-Zа-яА-Я ]+)")
+ONLINE_RE = re.compile(r"([\d\s  ]+)\s*online", re.I)
 
 DEAD_TITLE_PREFIXES = (
     "telegram: contact",
@@ -34,8 +51,6 @@ RESTRICTED_MARKERS = (
     "this channel is not accessible",
     "this group is not accessible",
 )
-SUBSCRIBER_WORDS = ("subscriber", "подписчик")
-MEMBER_WORDS = ("member", "участник")
 LEGACY_BOTS = {"botfather", "stickers", "gif", "vid", "pic", "bing", "wiki", "imdb"}
 
 LINK_RE = re.compile(
@@ -76,44 +91,88 @@ def _meta(page: str, prop: str) -> str | None:
     return html_mod.unescape(m.group(1)).strip() if m else None
 
 
-def _parse_members(extra: str | None) -> int | None:
-    if not extra:
-        return None
-    m = NUM_RE.match(extra)
-    if not m:
-        return None
-    digits = re.sub(r"\D", "", m.group(1))
+def _digits(text: str) -> int | None:
+    digits = re.sub(r"\D", "", text)
     return int(digits) if digits else None
 
 
-def _guess_kind(username: str, extra: str | None, is_invite: bool) -> str:
-    if is_invite:
+def _counts(extras: list[str]) -> tuple[int | None, str | None, int | None]:
+    """Из всех блоков extra достаём число, его подпись и сколько онлайн.
+
+    Подпись важна сама по себе: 'subscribers' у канала, 'members' у группы,
+    'monthly users' у бота — по ней же уточняется тип.
+    """
+    count = label = online = None
+    for extra in extras:
+        if not extra or extra.startswith("@"):
+            continue
+        online_m = ONLINE_RE.search(extra)
+        if online_m:
+            online = _digits(online_m.group(1))
+        head = extra.split(",")[0]
+        m = COUNT_RE.match(head)
+        if m and count is None:
+            count = _digits(m.group(1))
+            label = m.group(2).strip().lower() or None
+        elif label is None and head.lower().startswith("no "):
+            # «no subscribers» — счётчик спрятан владельцем, но тип этим и выдан
+            label = head[3:].strip().lower() or None
+    return count, label, online
+
+
+def _kind(username: str, label: str | None, action: str | None, has_preview: bool,
+          is_private: bool) -> str:
+    """Тип определяем по нескольким независимым признакам, а не по одному.
+
+    Подпись числа надёжнее всего, кнопка действия — второй свидетель:
+    «Start Bot» у бота, «Send Message» у человека, «View in Telegram» у канала.
+    """
+    if is_private:
         return "private_invite"
-    low = (extra or "").lower()
-    if any(w in low for w in SUBSCRIBER_WORDS):
+
+    label = (label or "").lower()
+    if "subscriber" in label or "подписчик" in label:
         return "channel"
-    if any(w in low for w in MEMBER_WORDS):
+    if "monthly user" in label:
+        return "bot"
+    if "member" in label or "участник" in label:
         return "group"
+
+    act = (action or "").lower()
+    if "start bot" in act:
+        return "bot"
+    if "join group" in act:
+        return "group"
+    if "join channel" in act or has_preview:
+        return "channel"
+    if "send message" in act:
+        return "user"
+
     uname = username.lower()
     if uname.endswith("bot") or uname in LEGACY_BOTS:
         return "bot"
-    if low.startswith("@"):
-        return "user"
     return "unknown"
 
 
 def parse_preview(page: str, username: str, url: str, status: int = 200) -> dict:
     """Чистая функция: HTML -> ответ ключа. Без сети, тестируется офлайн."""
-    base = {"username": username, "url": url, "is_alive": False}
+    is_private = username.startswith("+")
+    base = {
+        "username": username,
+        "url": url,
+        "is_alive": False,
+        "is_private": is_private,
+    }
     if status != 200:
         return base | {"error": f"HTTP {status}"}
 
     page_low = page.lower()
     if any(marker in page_low for marker in RESTRICTED_MARKERS):
-        return base | {"error": "заблокирован Telegram"}
+        return base | {"restricted": True, "error": "заблокирован Telegram"}
 
     title_m = TITLE_RE.search(page)
-    title = _clean(title_m.group(1) if title_m else None)
+    title_raw = title_m.group(1) if title_m else None
+    title = _clean(title_raw)
     if not title:
         return base | {"error": "не существует / удалён"}
 
@@ -121,8 +180,13 @@ def parse_preview(page: str, username: str, url: str, status: int = 200) -> dict
     if any(og_title.startswith(p) for p in DEAD_TITLE_PREFIXES):
         return base | {"error": "заглушка Telegram"}
 
-    extra_m = EXTRA_RE.search(page)
-    extra = _clean(extra_m.group(1) if extra_m else None)
+    extras = [_clean(e) or "" for e in EXTRA_RE.findall(page)]
+    members_count, members_label, online_count = _counts(extras)
+
+    action = _clean(ACTION_RE.search(page).group(1)) if ACTION_RE.search(page) else None
+    preview_m = PREVIEW_RE.search(page)
+    deeplink_m = DEEPLINK_RE.search(page)
+
     desc_m = DESC_RE.search(page)
     description = _clean(desc_m.group(1) if desc_m else None) or _meta(page, "og:description")
 
@@ -137,11 +201,19 @@ def parse_preview(page: str, username: str, url: str, status: int = 200) -> dict
         "username": username,
         "url": url,
         "is_alive": True,
-        "kind": _guess_kind(username, extra, username.startswith("+")),
+        "kind": _kind(username, members_label, action, bool(preview_m), is_private),
         "title": title,
         "description": description,
-        "members_count": _parse_members(extra),
+        "members_count": members_count,
+        "members_label": members_label,
+        "online_count": online_count,
+        "verified": bool(VERIFIED_RE.search(title_raw or "")),
+        "is_private": is_private,
+        "restricted": False,
         "avatar_url": avatar,
+        "deep_link": deeplink_m.group(1) if deeplink_m else None,
+        "has_preview": bool(preview_m),
+        "action": action,
     }
 
 

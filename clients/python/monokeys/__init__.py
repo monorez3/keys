@@ -56,7 +56,15 @@ class Answer(dict):
 
 
 class _Key:
-    """Один ключ как вызываемый объект: k.alive(...) и k.alive.text(...)."""
+    """Один ключ как вызываемый объект.
+
+        k.alive("@durov")                 -> весь ответ
+        k.alive.members_count("@durov")   -> только число, уже числом
+        k.alive.text("@durov")            -> одной строкой для человека
+
+    Имена полей не зашиты: они приходят с сервера вместе со списком ключей,
+    поэтому опечатка ловится сразу и с подсказкой, а не отдаёт молча None.
+    """
 
     def __init__(self, keys: "Keys", name: str) -> None:
         self._keys = keys
@@ -69,8 +77,32 @@ class _Key:
         """Готовая человеческая строка вместо полей."""
         return self._keys.call(self._name, value, fmt="text", **params)
 
+    def fields(self) -> list[str]:
+        """Что этот ключ вообще умеет вернуть."""
+        return self._keys._fields(self._name)
+
+    def __getattr__(self, field: str):
+        if field.startswith("_"):
+            raise AttributeError(field)
+        known = self.fields()
+        if known and field not in known:
+            raise AttributeError(
+                f"у ключа '{self._name}' нет поля '{field}'; есть: {', '.join(known)}"
+            )
+
+        def получить(value: str | None = None, **params):
+            answer = self._keys.call(self._name, value, fmt="json", only=field, **params)
+            return answer.get(field)
+
+        получить.__name__ = field
+        получить.__doc__ = f"Только поле '{field}' ключа '{self._name}'."
+        return получить
+
+    def __dir__(self):
+        return list(super().__dir__()) + self.fields()
+
     def __repr__(self) -> str:
-        return f"<ключ {self._name}>"
+        return f"<ключ {self._name}: {', '.join(self.fields())}>"
 
 
 class Keys:
@@ -82,10 +114,13 @@ class Keys:
 
     # --- то, ради чего клиент существует ------------------------------- #
 
-    def call(self, name: str, value: str | None = None, *, fmt: str = "json", **params):
+    def call(self, name: str, value: str | None = None, *, fmt: str = "json",
+             only: str = "", **params):
         """Позвать ключ. value — главное значение, остальное по имени."""
         query = dict(params)
         query["fmt"] = fmt
+        if only:
+            query["only"] = only
         url = f"{self.base}/{name}/"
         if value is not None:
             url += urllib.parse.quote(str(value), safe="@+")
@@ -115,6 +150,13 @@ class Keys:
 
     def names(self) -> list[str]:
         return [k["id"] for k in self.catalog()["keys"]]
+
+    def _fields(self, name: str) -> list[str]:
+        """Поля ответа конкретного ключа — из того же каталога."""
+        for key in self.catalog()["keys"]:
+            if key["id"] == name:
+                return key.get("returns", [])
+        return []
 
     def __getattr__(self, name: str) -> _Key:
         if name.startswith("_"):

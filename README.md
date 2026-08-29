@@ -36,8 +36,22 @@ res = k.alive("@durov")
 
 print(res.is_alive)           # True
 print(res.title)              # Pavel Durov
-print(k.alive.text("@durov")) # жив · channel · Pavel Durov · 11 005 185 подписчиков
+
+# нужен только счётчик — только он и придёт, уже числом
+print(k.alive.members_count("@durov"))   # 11005185
+print(k.alive.kind("ru_python"))         # group
+print(k.alive.online_count("ru_python")) # 1730
+print(k.alive.fields())                  # что этот ключ вообще умеет вернуть
 ```
+
+То же самое без клиента — параметром `only`:
+
+```
+https://АДРЕС/alive/durov?only=members_count   ->  11005185
+```
+
+Имя поля сверяется с манифестом: опечатка вернёт список существующих полей,
+а не пустоту, которую легко принять за ноль.
 
 Методы клиента не зашиты в код: их список приходит с сервера, поэтому новый
 ключ доступен сразу, без обновления клиента. Обращение к несуществующему ключу
