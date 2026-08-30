@@ -1,0 +1,43 @@
+# Публикация monokeys на PyPI через доверенного издателя.
+#
+# Токенов тут нет и быть не должно: PyPI доверяет самому GitHub по OIDC,
+# поэтому в репозитории не лежит ни одного секрета. Запускается вручную
+# кнопкой или пушем тега вида v0.2.0.
+
+name: Публикация monokeys на PyPI
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # именно это разрешение и позволяет PyPI опознать сборку без токена
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Проверить, что клиент вообще работает
+        run: |
+          python -m pip install --quiet fastapi "uvicorn[standard]" httpx pytest
+          python -m pytest tests/ -q
+
+      - name: Собрать пакет
+        working-directory: clients/python
+        run: |
+          python -m pip install --quiet build
+          python -m build --wheel --sdist
+
+      - name: Отправить на PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: clients/python/dist/
