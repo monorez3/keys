@@ -3,7 +3,7 @@
 **Живёт здесь: https://monoblock.casa/keys/**
 
 ```bash
-pip install --index-url https://monoblock.casa/keys/sdk/simple monokeys
+pip install monokeys
 ```
 
 ```python

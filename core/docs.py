@@ -263,7 +263,7 @@ def client_page(base_url: str, public_token: str = "") -> str:
 
         "<h2>Поставить</h2>"
         "<pre>pip install monokeys</pre>"
-        f"<p class=sub>Или тем же файлом: <code>curl {html.escape(base_url)}"
+        f"<p class=sub>Или тем же файлом, без установки: <code>curl {html.escape(base_url)}"
         "/sdk/python &gt; monokeys.py</code></p>"
 
         "<h2>Ключ доступа</h2>"
