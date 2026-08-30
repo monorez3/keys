@@ -41,7 +41,7 @@ import urllib.parse
 import urllib.request
 
 BASE = "https://monoblock.casa/keys"  # BASE-MARKER: подменяется при отдаче с сервера
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 __all__ = ["Keys", "Answer", "KeysError", "AccessDenied", "Unavailable"]
 
@@ -61,6 +61,25 @@ class AccessDenied(KeysError):
 
 class Unavailable(KeysError):
     """Сервер сейчас занят или источник не ответил. Осмысленно повторить позже."""
+
+
+def _только_для_заголовка(значение: str, что: str) -> str:
+    """HTTP-заголовки принимают только латиницу.
+
+    Без этой проверки кириллица в ключе доступа или в user_agent падала
+    UnicodeEncodeError из глубины urllib — человек видел ошибку кодировки и
+    гадал, при чём тут вообще он. Ключи доступа кириллицы не содержат никогда,
+    так что это всегда опечатка, и сказать о ней надо прямо.
+    """
+    if значение:
+        try:
+            значение.encode("latin-1")
+        except UnicodeEncodeError:
+            raise ValueError(
+                f"{что} может состоять только из латинских букв, цифр и знаков; "
+                f"получено: {значение!r}"
+            ) from None
+    return значение
 
 
 class Answer(dict):
@@ -169,11 +188,14 @@ class Keys:
     def __init__(self, token: str | None = None, base: str = BASE, *,
                  timeout: float = 20.0, retries: int = 1,
                  user_agent: str = f"monokeys/{VERSION}") -> None:
-        self.token = token if token is not None else os.environ.get("KEYS_API_KEY", "")
+        self.token = _только_для_заголовка(
+            token if token is not None else os.environ.get("KEYS_API_KEY", ""),
+            "ключ доступа",
+        )
         self.base = base.rstrip("/")
         self.timeout = timeout
         self.retries = max(0, retries)
-        self.user_agent = user_agent
+        self.user_agent = _только_для_заголовка(user_agent, "user_agent")
         self._catalog: dict | None = None
         self._public: str | None = None
 
@@ -244,6 +266,9 @@ class Keys:
                 последняя = exc
                 if попытка < self.retries:
                     time.sleep(0.3)
+            except UnicodeError as exc:
+                # нелатинское имя хоста в base: сеть такой адрес не примет
+                raise Unavailable(f"адрес {self.base} не годится: {exc}") from exc
         raise Unavailable(f"не дозвонился до {self.base}: {последняя}")
 
     # --- что вообще есть на сервере -------------------------------------- #

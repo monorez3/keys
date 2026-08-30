@@ -561,7 +561,10 @@ async def run_short(key_id: str, value: str, request: Request):
     fmt = params.pop("fmt", "text")  # короткая форма по умолчанию отвечает строкой
     only = params.pop("only", "")
     params.pop("token", None)
-    params[key.manifest.primary_param().name] = value
+    if value:
+        params[key.manifest.primary_param().name] = value
+    # пустое значение в пути (/alive/?link=durov) не должно затирать параметр,
+    # переданный по имени — иначе вызов молча превращается в «не хватает параметров»
 
     status, body = await call_key(key_id, params, *caller(request))
     return respond(key_id, status, body, fmt, only)

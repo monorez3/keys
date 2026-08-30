@@ -313,13 +313,13 @@ def test_клиент_зовёт_короткую_форму_и_шлёт_клю�
 
     monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
 
-    k = client_lib.Keys(token="kx_тест", base="https://example.test")
+    k = client_lib.Keys(token="kx_test123", base="https://example.test")
     res = k.call("alive", "@durov", fmt="json")
 
     # @ и + в адресе не кодируем: так ссылка остаётся читаемой глазом
     assert отправлено["url"].startswith("https://example.test/alive/@durov?")
     assert "fmt=json" in отправлено["url"]
-    assert отправлено["auth"] == "Bearer kx_тест"
+    assert отправлено["auth"] == "Bearer kx_test123"
     assert client_lib.Answer(res).title == "Pavel Durov"
 
 
@@ -750,13 +750,13 @@ def test_аргументы_вызова_доезжают_до_адреса(monk
         return FakeResponse()
 
     monkeypatch.setattr(client_lib.urllib.request, "urlopen", fake_urlopen)
-    k = client_lib.Keys(base="https://example.test", timeout=20, user_agent="тест/1")
+    k = client_lib.Keys(base="https://example.test", timeout=20, user_agent="test/1")
     k._catalog = {"keys": [{"id": "alive", "returns": ["members_count"]}]}
 
     k.alive("@durov", only="members_count", timeout=3)
     assert "only=members_count" in отправлено["url"]
     assert отправлено["timeout"] == 3, "timeout вызова должен побеждать общий"
-    assert отправлено["ua"] == "тест/1"
+    assert отправлено["ua"] == "test/1"
 
 
 def test_ошибки_разложены_по_смыслу(monkeypatch):
@@ -1020,3 +1020,30 @@ def test_кривой_вход_объясняет_себя_а_не_падает(
 def test_выдача_ключей_закрыта_без_пароля_владельца():
     assert клиент.post("/token").status_code in (401, 503)
     assert клиент.get("/tokens").status_code in (401, 503)
+
+
+# --- находки полного перебора аргументов ------------------------------------ #
+
+def test_пустое_значение_в_пути_не_затирает_именованный_параметр():
+    """/alive/?link=durov — короткая форма подставляла пустое значение поверх
+    параметра, и вызов молча превращался в «не хватает параметров»."""
+    ответ = клиент.get("/settle/", params={"expenses": "а:100:а,б; б:300:а,б"})
+    assert ответ.status_code == 200, ответ.text
+    assert "перевод" in ответ.text
+
+
+def test_нелатинский_ключ_доступа_объясняет_себя():
+    """Раньше кириллица в ключе падала UnicodeEncodeError из глубины urllib."""
+    with pytest.raises(ValueError, match="только из латинских"):
+        client_lib.Keys(token="kx_чужой")
+
+
+def test_нелатинский_user_agent_объясняет_себя():
+    with pytest.raises(ValueError, match="только из латинских"):
+        client_lib.Keys(user_agent="тест/1")
+
+
+def test_обычный_ключ_и_user_agent_проходят():
+    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.2")
+    assert k.token == "kx_ABCdef123-_"
+    assert k.user_agent == "monokeys/0.2.2"
