@@ -129,11 +129,18 @@ def caller(request: Request) -> tuple[str, Quota | None]:
     return "ip:" + client_ip(request), QUOTA_ANON
 
 
-async def call_key(key_id: str, params: dict, who: str, quota: Quota | None) -> tuple[int, dict]:
+async def call_key(key_id: str, params: dict, who: str, quota: Quota | None,
+                   only: str = "") -> tuple[int, dict]:
     """Общий путь для обоих лиц: кэш -> квота -> сеть."""
     key = KEYS.get(key_id)
     if key is None:
         return 404, {"error": f"ключа '{key_id}' нет", "keys": sorted(KEYS)}
+
+    # «дай мне поле weather» значит «спроси погодный источник», а не «спроси
+    # кого попало и покажи пустое поле». Ключ объявляет это в манифесте
+    выбор = key.manifest.откуда_взять(only)
+    if выбор and not params.get(выбор[0]):
+        params = params | {выбор[0]: выбор[1]}
 
     missing = [p.name for p in key.manifest.params if p.required and not params.get(p.name)]
     if missing:
@@ -284,7 +291,7 @@ async def run_get(key_id: str, request: Request):
     fmt = params.pop("fmt", "json")
     only = params.pop("only", "")
     params.pop("token", None)
-    status, body = await call_key(key_id, params, *caller(request))
+    status, body = await call_key(key_id, params, *caller(request), only=only)
     return respond(key_id, status, body, fmt, only)
 
 
@@ -565,5 +572,5 @@ async def run_short(key_id: str, value: str, request: Request):
     # пустое значение в пути (/alive/?link=durov) не должно затирать параметр,
     # переданный по имени — иначе вызов молча превращается в «не хватает параметров»
 
-    status, body = await call_key(key_id, params, *caller(request))
+    status, body = await call_key(key_id, params, *caller(request), only=only)
     return respond(key_id, status, body, fmt, only)

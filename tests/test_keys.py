@@ -931,9 +931,9 @@ def test_нелатинский_user_agent_объясняет_себя():
 
 
 def test_обычный_ключ_и_user_agent_проходят():
-    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.4")
+    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.5")
     assert k.token == "kx_ABCdef123-_"
-    assert k.user_agent == "monokeys/0.2.4"
+    assert k.user_agent == "monokeys/0.2.5"
 
 
 def test_пустое_значение_в_пути_не_затирает_именованный_параметр(monkeypatch):
@@ -1052,3 +1052,26 @@ def test_у_ключа_описаны_все_источники():
     описано = {r.name for r in ключ.manifest.returns}
     assert set(отв.ВСЕ) <= описано, f"не описаны: {set(отв.ВСЕ) - описано}"
     assert set(отв.ДОВЕРИЕ) == set(отв.ВСЕ), "порядок доверия разошёлся со списком источников"
+
+
+def test_просят_поле_источника_значит_спрашивают_источник():
+    """`?only=weather` для «Хайфа» отдавал пустоту: поле просили, а источник
+    не спрашивали — в вопросе ведь нет слова «погода». Найдено вручную."""
+    ключ = discover(ROOT / "keys")["answer"]
+    assert ключ.manifest.откуда_взять("weather") == ("sources", "weather")
+    assert ключ.manifest.откуда_взять("osm") == ("sources", "osm")
+    # не всякое поле — источник: ответ и ссылки источниками не являются
+    assert ключ.manifest.откуда_взять("answer") is None
+    assert ключ.manifest.откуда_взять("links") is None
+    assert ключ.manifest.откуда_взять("") is None
+
+
+def test_у_ключа_без_объявления_это_ничего_не_меняет():
+    """alive источников не объявлял — значит only= работает как раньше."""
+    assert discover(ROOT / "keys")["alive"].manifest.откуда_взять("kind") is None
+
+
+def test_все_объявленные_источники_существуют():
+    ключ = discover(ROOT / "keys")["answer"]
+    объявлено = set(ключ.manifest.only_selects["fields"])
+    assert объявлено == set(отв.ВСЕ), f"разошлось: {объявлено ^ set(отв.ВСЕ)}"

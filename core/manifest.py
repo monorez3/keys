@@ -59,6 +59,7 @@ class Manifest:
     examples: list[dict] = field(default_factory=list)
     primary: str = ""
     short: dict = field(default_factory=dict)
+    only_selects: dict = field(default_factory=dict)
     path: Path | None = None
 
     # --- короткая форма: имя ключа + одна строка ------------------------- #
@@ -108,6 +109,17 @@ class Manifest:
             ex = self.examples[0]
             lines += ["", f"Пример: {json.dumps(ex['params'], ensure_ascii=False)} — {ex.get('note', '')}"]
         return "\n".join(lines).strip()
+
+    def откуда_взять(self, поле: str) -> tuple[str, str] | None:
+        """Просят поле, которое называет источник, — значит просят сам источник.
+
+        Без этого `?only=weather` для «Хайфа» отдавал пустоту: поле просили,
+        а источник не спрашивали, потому что в вопросе нет слова «погода».
+        Ключ объявляет такие поля в манифесте сам — угадывать нельзя.
+        """
+        if поле and поле in set(self.only_selects.get("fields", [])):
+            return self.only_selects["param"], поле
+        return None
 
     def ttl_for(self, alive: bool) -> int:
         """Мёртвое кэшируем короче: канал может воскреснуть, живой — вряд ли исчезнет."""
@@ -190,5 +202,6 @@ def load(path: Path) -> Manifest:
         examples=raw.get("examples", []),
         primary=raw.get("primary", ""),
         short=raw.get("short", {}),
+        only_selects=raw.get("only_selects", {}),
         path=path.parent,
     )
