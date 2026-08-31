@@ -42,12 +42,11 @@ from security import (                         # noqa: E402
 from tokens import Tokens, public_id           # noqa: E402
 from runtime import (                          # noqa: E402
     Busy,
-    OUTBOUND_BURST,
     OUTBOUND_RPS,
     Cache,
     Context,
     FetchError,
-    TokenBucket,
+    Краны,
 )
 
 MCP_PROTOCOL = "2025-06-18"
@@ -64,7 +63,7 @@ DATA = Path(os.environ.get("KEYS_DATA_DIR", ROOT))
 DATA.mkdir(parents=True, exist_ok=True)
 
 CACHE = Cache(DATA / "cache.db")
-BUCKET = TokenBucket(OUTBOUND_RPS, OUTBOUND_BURST)
+BUCKET = Краны()
 TOKENS = Tokens(DATA / "tokens.db")
 STARTED = time.time()
 _client: httpx.AsyncClient | None = None

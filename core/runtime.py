@@ -19,6 +19,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -134,10 +135,45 @@ class Cache:
         return cur.rowcount
 
 
+# Сколько запросов в секунду не жалко конкретному источнику. По умолчанию
+# щадящие 5 — столько же, сколько терпит t.me. Крупные открытые API выдерживают
+# больше и сами это разрешают, поэтому душить их общим краном незачем: медленный
+# сосед не должен тормозить остальных.
+ПО_ИСТОЧНИКАМ = {
+    "t.me": 5.0,
+    "ru.wikipedia.org": 20.0,
+    "en.wikipedia.org": 20.0,
+    "www.wikidata.org": 15.0,
+    "api.duckduckgo.com": 10.0,
+    "nominatim.openstreetmap.org": 1.0,   # их правила: не чаще одного в секунду
+    "api.groq.com": 5.0,
+}
+
+
+class Краны:
+    """Отдельный кран на каждый источник.
+
+    Раньше кран был один на всех, и это было верно, пока источник был один.
+    С несколькими источниками общий кран означает, что запрос к Википедии
+    ждёт очереди из-за Telegram, хотя Википедия готова отвечать вчетверо чаще.
+    """
+
+    def __init__(self, по_умолчанию: float = OUTBOUND_RPS) -> None:
+        self.по_умолчанию = по_умолчанию
+        self._краны: dict[str, TokenBucket] = {}
+
+    def для(self, url: str) -> TokenBucket:
+        хост = urlsplit(url).hostname or "?"
+        if хост not in self._краны:
+            rps = ПО_ИСТОЧНИКАМ.get(хост, self.по_умолчанию)
+            self._краны[хост] = TokenBucket(rps, max(int(rps * 4), OUTBOUND_BURST))
+        return self._краны[хост]
+
+
 class Context:
     """Единственная дверь ключа во внешний мир."""
 
-    def __init__(self, cache: Cache, bucket: TokenBucket, client: httpx.AsyncClient) -> None:
+    def __init__(self, cache: Cache, bucket, client: httpx.AsyncClient) -> None:
         self.cache = cache
         self.bucket = bucket
         self.client = client
@@ -150,9 +186,16 @@ class Context:
         проверке. Повторяем только транспортные ошибки — ответ сервера, даже
         плохой, это ответ, и переспрашивать его незачем.
         """
+        if self.client is None:
+            raise FetchError(
+                "нет сетевого клиента: приложение не прошло запуск "
+                "(в тестах поднимайте его через TestClient как контекст)"
+            )
+
+        кран = self.bucket.для(url) if isinstance(self.bucket, Краны) else self.bucket
         last: Exception | None = None
         for попытка in range(2):
-            await self.bucket.take()
+            await кран.take()
             try:
                 resp = await self.client.get(
                     url, timeout=timeout, headers={"User-Agent": UA}, follow_redirects=True
@@ -168,3 +211,24 @@ class Context:
         # у части ошибок httpx текст пустой — тогда «сеть не ответила: »
         # выглядит как наша поломка; имя класса всегда что-то говорит
         raise FetchError(str(last) or type(last).__name__) from last
+
+    async def post(self, url: str, *, json_body: dict, headers: dict | None = None,
+                   timeout: float = 30.0) -> Response:
+        """POST — тем источникам, которые иначе не спросить (ИИ, например).
+
+        Повторов тут нет намеренно: повторить POST — значит, возможно, сделать
+        работу дважды. Для чтения это безобидно, для отправки нет.
+        """
+        if self.client is None:
+            raise FetchError("нет сетевого клиента: приложение не прошло запуск")
+
+        кран = self.bucket.для(url) if isinstance(self.bucket, Краны) else self.bucket
+        await кран.take()
+        try:
+            resp = await self.client.post(
+                url, json=json_body, timeout=timeout,
+                headers={"User-Agent": UA, **(headers or {})},
+            )
+        except httpx.HTTPError as exc:
+            raise FetchError(str(exc) or type(exc).__name__) from exc
+        return Response(status=resp.status_code, text=resp.text, url=str(resp.url))

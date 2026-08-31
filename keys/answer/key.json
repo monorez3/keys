@@ -1,0 +1,46 @@
+{
+  "id": "answer",
+  "title": "Ответ на вопрос",
+  "summary": "Спрашивает много источников разом и отдаёт ответ каждого плюс лучший.",
+  "description": "Вопрос уходит параллельно в Википедию, Викиданные, Викисловарь, DuckDuckGo, на карту OpenStreetMap, в погоду, в курсы валют, в научные базы, в каталог книг и в реестры пакетов. Каждый источник отвечает своим полем, отдельно называется лучший ответ и ссылки, которыми его можно проверить. Если sources не указать, ключ смотрит на сам вопрос и решает, кого спрашивать: про город — карту, про валюту — курсы, про пакет — реестры. Моделей тут нет намеренно: бесплатные упираются в лимиты, а их ответ нечем проверить. Выдача поисковиков не скребётся — берутся только источники с открытым интерфейсом, которые сами разрешают к себе ходить.",
+  "tags": ["поиск", "справка", "много-источников", "без-ключей"],
+  "source": {"project": "Ключи", "note": "13 открытых источников, ни одного платного ключа"},
+  "params": [
+    {"name": "q", "type": "string", "required": true, "description": "сам вопрос, обычными словами", "example": "кто такой Павел Дуров"},
+    {"name": "sources", "type": "string", "required": false, "description": "через запятую: wiki, ddg, wikidata, wiktionary, osm, weather, rates, crossref, arxiv, books, pypi, npm, github; пусто — ключ выберет сам; all — все", "example": "wiki,osm"},
+    {"name": "lang", "type": "string", "required": false, "description": "ru или en", "example": "ru"}
+  ],
+  "returns": [
+    {"name": "ok", "type": "boolean", "description": "нашлось ли хоть что-то"},
+    {"name": "answer", "type": "string", "description": "лучший ответ из всех источников"},
+    {"name": "source", "type": "string", "description": "чей это ответ"},
+    {"name": "asked", "type": "string", "description": "кого спрашивали"},
+    {"name": "found", "type": "string", "description": "кто ответил не пустым"},
+    {"name": "links", "type": "string", "description": "ссылки, которыми ответ можно проверить"},
+    {"name": "wiki", "type": "string", "description": "Википедия: сводка статьи"},
+    {"name": "ddg", "type": "string", "description": "DuckDuckGo: краткая справка"},
+    {"name": "wikidata", "type": "string", "description": "Викиданные: что это за сущность"},
+    {"name": "wiktionary", "type": "string", "description": "Викисловарь: значение слова"},
+    {"name": "osm", "type": "string", "description": "OpenStreetMap: место на карте"},
+    {"name": "weather", "type": "string", "description": "погода в этом месте прямо сейчас"},
+    {"name": "rates", "type": "string", "description": "курс валют по данным ЕЦБ"},
+    {"name": "crossref", "type": "string", "description": "научная статья по теме"},
+    {"name": "arxiv", "type": "string", "description": "препринт по теме"},
+    {"name": "books", "type": "string", "description": "книга из каталога Open Library"},
+    {"name": "pypi", "type": "string", "description": "пакет Python"},
+    {"name": "npm", "type": "string", "description": "пакет JavaScript"},
+    {"name": "github", "type": "string", "description": "репозиторий на GitHub"},
+    {"name": "error", "type": "string", "description": "что не так с вопросом, если не так"}
+  ],
+  "primary": "q",
+  "short": {"field": "ok", "yes": "{answer} · источник: {source}", "no": "не нашёл · {error}"},
+  "cache_ttl": {"alive": 21600, "dead": 3600},
+  "cost": "network",
+  "examples": [
+    {"params": {"q": "кто такой Павел Дуров"}, "note": "общая справка: Википедия, Викиданные, DuckDuckGo"},
+    {"params": {"q": "погода в Хайфе"}, "note": "ключ сам поймёт, что нужны карта и погода"},
+    {"params": {"q": "курс доллара к шекелю"}, "note": "курс от Европейского центробанка"},
+    {"params": {"q": "Хайфа", "sources": "osm,wiki"}, "note": "только карта и Википедия"},
+    {"params": {"q": "кватернион", "sources": "all"}, "note": "все тринадцать источников разом"}
+  ]
+}
