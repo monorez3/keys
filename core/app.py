@@ -165,7 +165,8 @@ async def call_key(key_id: str, params: dict, who: str, quota: Quota | None,
             return 429, {
                 "error": why,
                 "потрачено_за_сутки": quota.used(who),
-                "подсказка": "с ключом доступа лимита нет — попросите ключ у владельца",
+                "подсказка": "с ключом доступа счётчика нет; публичный лежит "
+                             "открыто на /public-token, брать может любой",
             }
 
     ctx = Context(CACHE, BUCKET, _client)

@@ -12,8 +12,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from manifest import Manifest
 from snippets import example_params
+
+
+def _версия() -> str:
+    """Версия из pyproject клиента — единственное место, где она объявлена."""
+    файл = Path(__file__).resolve().parent.parent / "clients" / "python" / "pyproject.toml"
+    try:
+        for строка in файл.read_text(encoding="utf-8").splitlines():
+            if строка.startswith("version"):
+                return строка.split('"')[1]
+    except Exception:
+        pass
+    return "0"
+
+
+ВЕРСИЯ = _версия()
 
 JSON_TYPES = {"string": "string", "integer": "integer", "number": "number", "boolean": "boolean"}
 
@@ -65,7 +82,8 @@ def openapi(manifests: list[Manifest], base_url: str) -> dict:
         "openapi": "3.1.0",
         "info": {
             "title": "Ключи",
-            "version": "0.1.0",
+            # берём из библиотеки: иначе спека годами обещает 0.1.0
+            "version": ВЕРСИЯ,
             "description": (
                 "Маленькие умные функции. Обычный HTTP — работает из любого языка "
                 "без единой зависимости. Лимит: 60 запросов в минуту и 2000 в сутки "
