@@ -126,6 +126,19 @@ class Cache:
         )
         self.db.commit()
 
+    def clear(self) -> int:
+        """Забыть всё — и в базе, и в памяти процесса.
+
+        Чистить только базу мало: слой в памяти живёт отдельно и продолжает
+        отдавать старое. На этом я и попался — стёр таблицу, а сервер полчаса
+        возвращал ответ, которого там уже не было.
+        """
+        было = len(self.mem)
+        self.mem.clear()
+        cur = self.db.execute("DELETE FROM cache")
+        self.db.commit()
+        return max(было, cur.rowcount)
+
     def sweep(self) -> int:
         """Чистка протухшего. Раз в час хватает: строки маленькие."""
         now = time.time()

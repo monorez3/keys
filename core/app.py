@@ -446,6 +446,14 @@ async def rotate_public(request: Request) -> JSONResponse:
     })
 
 
+@app.post("/cache/clear")
+async def clear_cache(request: Request) -> JSONResponse:
+    """Забыть накопленные ответы. Нужно после правки ключа: иначе он ещё
+    сутки отдаёт то, что насчитала прежняя версия."""
+    require_admin(request)
+    return JSONResponse({"забыто_записей": CACHE.clear()})
+
+
 @app.get("/tokens")
 async def list_tokens(request: Request) -> JSONResponse:
     """Кому что выдано и чем пользуются. Самих ключей тут нет и быть не может."""
