@@ -208,7 +208,9 @@ For `answer`, the fields you name also say **who to ask**:
 /answer/Haifa?sources=osm,wikidata     # both answers, not just the winner
 ```
 
-`lang=` works across languages too — the subject is translated through the map.
+`lang=` picks the source language. Do not ask an English source in Russian:
+English Wikipedia answers "Хайфа" with a footballer of the same name, so such
+an answer is thrown away and the key honestly says nothing.
 
 ## You can skip the library entirely
 
