@@ -32,7 +32,10 @@ from urllib.parse import quote, urlencode
 
 # Кому нужно больше: погода ходит дважды подряд (сначала карта за координатами,
 # потом метео), поэтому с общим пределом она проигрывала гонку и молчала.
-ЖДЁМ_ОСОБО = {"weather": 14.0, "arxiv": 12.0}
+# Кому нужно больше: эти ходят дважды подряд — сначала на карту за
+# координатами, потом к самим данным.
+ЖДЁМ_ОСОБО = {"weather": 14.0, "sea": 14.0, "flood": 14.0, "history": 14.0,
+              "time": 14.0, "arxiv": 12.0, "drug": 12.0}
 
 ТЕГИ = re.compile(r"<[^>]+>")
 ВОПРОСИТЕЛЬНЫЕ = re.compile(
@@ -84,7 +87,15 @@ def _чисто(текст: str | None, предел: int = 400) -> str:
     r"стать[ияю]\s+(про|о)?\s*|исследовани[ея]\s+(про|о)?\s*|"
     r"paper[s]?\s+(on|about)?\s*|article[s]?\s+(on|about)?\s*|"
     r"research\s+(on|about)?\s*|study\s+(on|about)?\s*|"
-    r"что\s+значит\s+слово\s+|значение\s+слова\s+|слово\s+|word\s+)", re.I
+    r"что\s+значит\s+слово\s+|значение\s+слова\s+|слово\s+|word\s+|"
+    r"который\s+час\s+(в|на)?\s*|сколько\s+времени\s+(в|на)?\s*|время\s+(в|на)\s+|"
+    r"what\s+time\s+(is\s+it\s+)?(in|at)?\s*|time\s+(in|at)\s+|"
+    r"столица\s+|capital\s+of\s+|население\s+|population\s+of\s+|страна\s+|"
+    r"игра\s+|игру\s+|игры\s+|\bgame\s+|видеоигра\s+|"
+    r"море\s+(в|у|около)?\s*|морская\s+погода\s+(в|у)?\s*|волны\s+(в|у)?\s*|"
+    r"sea\s+(at|in|near)?\s*|waves?\s+(at|in|near)?\s*|"
+    r"паводок\s+(в|на)?\s*|наводнение\s+(в|на)?\s*|flood\s+(in|at)?\s*|"
+    r"лекарство\s+|препарат\s+|таблетки\s+|drug\s+|medicine\s+)", re.I
 )
 
 
@@ -217,22 +228,41 @@ async def _wiktionary(в: str, язык: str, ctx) -> tuple[str, str]:
 
 
 async def _на_карте(запрос: str, язык: str, ctx) -> list:
-    """Найти место, с поправкой на падежи.
+    """Найти место, с поправкой на русские падежи.
 
-    Карта знает «Хайфа», но не знает «Хайфе». Русские окончания она не
-    разбирает, зато ищет по началу слова — поэтому при неудаче пробуем
-    ещё раз, отрезав окончание. Проверено: «Хайфе» пусто, «Хайф» находит.
+    Карта знает «Хайфа», но не знает «Хайфе»: русских окончаний она не
+    разбирает. Обрезать окончание мало — «Хайф» находит посёлок в Йемене со
+    значимостью 0.133, а настоящая Хайфа имеет 0.694. Поэтому пробуем
+    несколько форм и берём самое значимое место, а совсем невзрачные
+    отбрасываем: лучше промолчать, чем ответить про чужую деревню.
     """
-    async def спросить(q: str) -> list:
-        return json.loads((await ctx.fetch(
-            "https://nominatim.openstreetmap.org/search?" + urlencode({
-                "q": q, "format": "json", "limit": 1,
-                "accept-language": язык}))).text)
+    формы = [запрос]
+    if len(запрос) > 4 and " " not in запрос:
+        основа = запрос[:-1]
+        формы += [основа + "а", основа + "я", основа]
 
-    найдено = await спросить(запрос)
-    if not найдено and len(запрос) > 4 and " " not in запрос:
-        найдено = await спросить(запрос[:-1])
-    return найдено
+    лучшее: list = []
+    for форма in формы:
+        try:
+            найдено = json.loads((await ctx.fetch(
+                "https://nominatim.openstreetmap.org/search?" + urlencode({
+                    "q": форма, "format": "json", "limit": 3,
+                    "accept-language": язык}))).text)
+        except Exception:
+            continue
+        for м in найдено:
+            м["_вес"] = float(м.get("importance") or 0)
+        лучшее += найдено
+        # исходная форма нашлась уверенно — дальше искать незачем.
+        # Порог именно 0.6: «Москве» даёт институт с весом 0.554, а сам
+        # город находится только по форме «Москва» и весит заметно больше.
+        if найдено and max(м["_вес"] for м in найдено) >= 0.6:
+            break
+
+    лучшее.sort(key=lambda м: -м["_вес"])
+    if not лучшее or лучшее[0]["_вес"] < 0.2:
+        return []
+    return лучшее[:1]
 
 
 async def _osm(в: str, язык: str, ctx) -> tuple[str, str]:
@@ -478,18 +508,241 @@ def похоже(вопрос: str, ответ: str) -> bool:
     return not спросили or bool(спросили & слова(ответ))
 
 
+# --------------------------------------------------------------------------- #
+# источники, добавленные вторым заходом
+# --------------------------------------------------------------------------- #
+
+async def _dict(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Английский словарь с чистыми толкованиями.
+
+    Живёт рядом с Викисловарём, а не вместо него: у Викисловаря есть русский
+    и этимология, у этого — аккуратные значения и транскрипция. Кому что
+    нужно, тот то и берёт.
+    """
+    очищено = без_темы(суть(в))
+    слово = очищено.split()[-1] if очищено else в
+    if КИРИЛЛИЦА.search(слово):
+        return "", ""            # словарь только английский, не притворяемся
+
+    ответ = await ctx.fetch(f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(слово)}")
+    if ответ.status != 200:
+        return "", ""
+    статьи = json.loads(ответ.text)
+    if not статьи:
+        return "", ""
+
+    первая = статьи[0]
+    звучание = первая.get("phonetic", "")
+    for значение in первая.get("meanings", []):
+        for опред in значение.get("definitions", []):
+            текст = опред.get("definition", "")
+            if текст:
+                часть = значение.get("partOfSpeech", "")
+                собрано = " · ".join(x for x in [слово, звучание, часть, текст] if x)
+                return _чисто(собрано, 300), f"https://dictionaryapi.dev/"
+    return "", ""
+
+
+async def _time(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Который час в этом месте. Часовой пояс берём по координатам с карты."""
+    найдено = await _на_карте(без_темы(суть(в)), язык, ctx)
+    if not найдено:
+        return "", ""
+    м = найдено[0]
+    данные = json.loads((await ctx.fetch(
+        "https://timeapi.io/api/Time/current/coordinate?" + urlencode({
+            "latitude": м["lat"], "longitude": м["lon"]}))).text)
+    место = (м.get("display_name") or "").split(",")[0]
+    часы = f"{данные.get('hour', 0):02d}:{данные.get('minute', 0):02d}"
+    дата = f"{данные.get('day', 0):02d}.{данные.get('month', 0):02d}.{данные.get('year', 0)}"
+    пояс = данные.get("timeZone", "")
+    return f"{место}: {часы}, {дата} ({пояс})", "https://timeapi.io/"
+
+
+async def _country(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Страна: столица, валюта, население.
+
+    Источник сменился по нужде: restcountries, который напрашивался первым,
+    объявлен устаревшим и на любой запрос отвечает «This API version has been
+    deprecated». Здесь другой, живой, но он знает только английские названия —
+    поэтому русское название сначала переводим через карту, она это умеет.
+    """
+    имя = без_темы(суть(в))
+    if not имя:
+        return "", ""
+
+    if КИРИЛЛИЦА.search(имя):
+        # карта отдаёт названия на запрошенном языке: спрашиваем по-английски
+        места = await _на_карте(имя, "en", ctx)
+        if not места:
+            return "", ""
+        имя = (места[0].get("display_name") or "").split(",")[-1].strip() or имя
+
+    async def спросить(путь: str) -> dict:
+        try:
+            ответ = await ctx.fetch(
+                f"https://countriesnow.space/api/v0.1/countries/{путь}?" +
+                urlencode({"country": имя}))
+            return json.loads(ответ.text)
+        except Exception:
+            return {}
+
+    столица, валюта = await asyncio.gather(спросить("capital/q"), спросить("currency/q"))
+    данные = столица.get("data") or {}
+    если_валюта = (валюта.get("data") or {}).get("currency")
+
+    название = данные.get("name") or имя
+    куски = [название]
+    if данные.get("capital"):
+        куски.append(f"столица {данные['capital']}")
+    if если_валюта:
+        куски.append(f"валюта {если_валюта}")
+    if данные.get("iso3"):
+        куски.append(данные["iso3"])
+
+    if len(куски) == 1:
+        return "", ""            # ничего кроме имени не узнали — это не ответ
+    return " · ".join(куски), "https://countriesnow.space/"
+
+
+async def _steam(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Игра в Steam: цена, дата выхода, платформы."""
+    имя = без_темы(суть(в))
+    данные = json.loads((await ctx.fetch(
+        "https://store.steampowered.com/api/storesearch/?" + urlencode({
+            "term": имя, "l": "russian" if язык == "ru" else "english", "cc": "IL"}))).text)
+    items = данные.get("items") or []
+    if not items:
+        return "", ""
+    и = items[0]
+    куски = [и.get("name", "")]
+    цена = и.get("price")
+    if isinstance(цена, dict) and цена.get("final") is not None:
+        куски.append(f"{цена['final'] / 100:.2f} {цена.get('currency', '')}".strip())
+    elif цена is None:
+        куски.append("бесплатно")
+    платформы = [п for п, есть in (и.get("platforms") or {}).items() if есть]
+    if платформы:
+        куски.append(", ".join(платформы))
+    ид = и.get("id")
+    return " · ".join(к for к in куски if к), f"https://store.steampowered.com/app/{ид}"
+
+
+async def _sea(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Море: высота волн и температура воды."""
+    найдено = await _на_карте(без_темы(суть(в)), язык, ctx)
+    if not найдено:
+        return "", ""
+    м = найдено[0]
+    данные = json.loads((await ctx.fetch(
+        "https://marine-api.open-meteo.com/v1/marine?" + urlencode({
+            "latitude": м["lat"], "longitude": м["lon"],
+            "current": "wave_height,wave_period,sea_surface_temperature"}))).text)
+    сейчас = данные.get("current") or {}
+    волна = сейчас.get("wave_height")
+    if волна is None:
+        return "", ""            # не у берега — моря тут просто нет
+    место = (м.get("display_name") or "").split(",")[0]
+    куски = [f"{место}: волна {волна} м"]
+    if сейчас.get("wave_period") is not None:
+        куски.append(f"период {сейчас['wave_period']} с")
+    if сейчас.get("sea_surface_temperature") is not None:
+        куски.append(f"вода {сейчас['sea_surface_temperature']}°C")
+    return " · ".join(куски), "https://open-meteo.com/"
+
+
+ДАТА = re.compile(r"(\d{4})-(\d{2})-(\d{2})|(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})")
+
+
+def дата_из(вопрос: str) -> str:
+    """«погода 2026-08-01» или «01.08.2026» -> 2026-08-01. Иначе пусто."""
+    м = ДАТА.search(вопрос)
+    if not м:
+        return ""
+    if м.group(1):
+        return f"{м.group(1)}-{м.group(2)}-{м.group(3)}"
+    return f"{м.group(6)}-{int(м.group(5)):02d}-{int(м.group(4)):02d}"
+
+
+async def _history(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Какая погода была в конкретный день. Без даты в вопросе молчит."""
+    день = дата_из(в)
+    if not день:
+        return "", ""
+    найдено = await _на_карте(без_темы(суть(ДАТА.sub("", в))), язык, ctx)
+    if not найдено:
+        return "", ""
+    м = найдено[0]
+    данные = json.loads((await ctx.fetch(
+        "https://archive-api.open-meteo.com/v1/archive?" + urlencode({
+            "latitude": м["lat"], "longitude": м["lon"],
+            "start_date": день, "end_date": день,
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum"}))).text)
+    д = данные.get("daily") or {}
+    если_есть = lambda имя: (д.get(имя) or [None])[0]
+    макс, мин = если_есть("temperature_2m_max"), если_есть("temperature_2m_min")
+    if макс is None:
+        return "", ""
+    место = (м.get("display_name") or "").split(",")[0]
+    куски = [f"{место} {день}: от {мин}°C до {макс}°C"]
+    осадки = если_есть("precipitation_sum")
+    if осадки:
+        куски.append(f"осадки {осадки} мм")
+    return " · ".join(куски), "https://open-meteo.com/"
+
+
+async def _flood(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Расход воды в реке рядом — грубый признак паводка."""
+    найдено = await _на_карте(без_темы(суть(в)), язык, ctx)
+    if not найдено:
+        return "", ""
+    м = найдено[0]
+    данные = json.loads((await ctx.fetch(
+        "https://flood-api.open-meteo.com/v1/flood?" + urlencode({
+            "latitude": м["lat"], "longitude": м["lon"],
+            "daily": "river_discharge"}))).text)
+    поток = ((данные.get("daily") or {}).get("river_discharge") or [None])[0]
+    if поток is None:
+        return "", ""
+    место = (м.get("display_name") or "").split(",")[0]
+    return f"{место}: расход реки {поток} м³/с", "https://open-meteo.com/"
+
+
+async def _drug(в: str, язык: str, ctx) -> tuple[str, str]:
+    """Лекарство: для чего, предупреждения. Источник — FDA США."""
+    имя = без_темы(суть(в))
+    if КИРИЛЛИЦА.search(имя):
+        return "", ""            # у FDA только английские названия
+    ответ = await ctx.fetch("https://api.fda.gov/drug/label.json?" + urlencode({
+        "search": f"openfda.brand_name:{имя} OR openfda.generic_name:{имя}", "limit": 1}))
+    if ответ.status != 200:
+        return "", ""
+    записи = json.loads(ответ.text).get("results") or []
+    if не_пусто := (записи[0] if записи else None):
+        for поле in ("indications_and_usage", "purpose", "description"):
+            текст = (не_пусто.get(поле) or [""])[0]
+            if текст:
+                return _чисто(f"{имя}: {текст}", 350), "https://open.fda.gov/"
+    return "", ""
+
+
 ИСТОЧНИКИ = {
     "wiki": _wiki, "ddg": _ddg, "wikidata": _wikidata, "wiktionary": _wiktionary,
-    "osm": _osm, "weather": _weather, "rates": _rates, "crossref": _crossref,
-    "arxiv": _arxiv, "books": _books, "pypi": _pypi, "npm": _npm, "github": _github,
+    "dict": _dict, "osm": _osm, "weather": _weather, "sea": _sea, "history": _history,
+    "flood": _flood, "time": _time, "country": _country, "rates": _rates,
+    "steam": _steam, "drug": _drug, "crossref": _crossref, "arxiv": _arxiv,
+    "books": _books, "pypi": _pypi, "npm": _npm, "github": _github,
 }
 ВСЕ = list(ИСТОЧНИКИ)
 
 # Порядок доверия: чем выше, тем раньше берём его ответ как лучший.
 # Точный факт впереди общей справки — «погода 24°C» полезнее, чем статья
 # про город, если спрашивали именно погоду.
-ДОВЕРИЕ = ["weather", "rates", "pypi", "npm", "github", "osm", "wiki", "ddg",
-           "wikidata", "wiktionary", "books", "crossref", "arxiv"]
+# Порядок доверия: сначала те, кто отвечает ровно на заданный вопрос, потом
+# общая справка. Внутри — от узкого к широкому.
+ДОВЕРИЕ = ["history", "sea", "flood", "weather", "time", "rates", "steam", "drug",
+           "pypi", "npm", "github", "country", "osm", "dict", "wiktionary",
+           "wiki", "ddg", "wikidata", "books", "crossref", "arxiv"]
 
 ВСЕГДА = ["wiki", "ddg", "wikidata"]  # общая справка спрашивается при любом вопросе
 
@@ -509,7 +762,17 @@ def похоже(вопрос: str, ответ: str) -> bool:
      r"paper|article|research|study|doi|arxiv|preprint|science", ["crossref", "arxiv"]),
     (r"книг|роман|автор|\bbook\b|novel|author|isbn", ["books"]),
     (r"что значит|значение слова|перевод слова|"
-     r"define|definition|meaning of|\bword\b", ["wiktionary"]),
+     r"define|definition|meaning of|\bword\b", ["wiktionary", "dict"]),
+    (r"который час|сколько времени|время в|часовой пояс|"
+     r"what time|time in|timezone|time zone", ["time"]),
+    (r"столиц|населен|площадь стран|валюта стран|"
+     r"capital of|population of|which country", ["country"]),
+    (r"\bигра\b|\bигры\b|steam|поиграть|видеоигр|"
+     r"\bgame\b|\bgames\b|videogame", ["steam"]),
+    (r"море|морск|волн|прибой|\bsea\b|wave|marine|surf", ["sea"]),
+    (r"паводок|наводнен|разлив реки|flood|river discharge", ["flood"]),
+    (r"лекарств|таблетк|препарат|дозировк|побочн|"
+     r"\bdrug\b|medicine|dosage|side effect", ["drug"]),
 ]
 
 

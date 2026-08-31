@@ -1,0 +1,54 @@
+{
+  "id": "dev",
+  "title": "Уязвимость, домен или адрес",
+  "summary": "CVE, домен или IP — одной строкой, без трёх вкладок в браузере.",
+  "description": "Три вещи, которые разработчик ищет чаще всего и каждый раз открывает разные сайты. Номер уязвимости — что за дыра, насколько опасна, что затронуто. Домен — кто владелец, когда истекает, куда указывает, есть ли копия в веб-архиве. IP-адрес — чей он, откуда и какой провайдер. Что именно вы дали, ключ понимает сам: номер, домен и адрес друг на друга не похожи. Источники открытые и без ключей: CIRCL (зеркало базы CVE), RDAP вместо устаревшего whois, DNS через Cloudflare, Веб-архив, ip-api.",
+  "tags": ["разработка", "безопасность", "домены"],
+  "source": {"project": "Ключи", "note": "собрано из открытых интерфейсов, ни одного платного"},
+  "params": [
+    {
+      "name": "q",
+      "type": "string",
+      "required": true,
+      "description": "номер уязвимости, домен или IP-адрес",
+      "example": "CVE-2021-44228"
+    }
+  ],
+  "returns": [
+    {"name": "kind", "type": "string", "description": "что распознали: cve, domain или ip"},
+    {"name": "subject", "type": "string", "description": "то же, приведённое к канону"},
+    {"name": "severity", "type": "string", "description": "оценка опасности уязвимости по CVSS"},
+    {"name": "published", "type": "string", "description": "когда уязвимость опубликовали"},
+    {"name": "description", "type": "string", "description": "в чём суть уязвимости"},
+    {"name": "affected", "type": "string", "description": "чьи продукты затронуты"},
+    {"name": "registrar", "type": "string", "description": "через кого зарегистрирован домен"},
+    {"name": "created", "type": "string", "description": "когда домен зарегистрировали"},
+    {"name": "expires", "type": "string", "description": "когда регистрация истекает"},
+    {"name": "nameservers", "type": "string", "description": "чьи DNS-серверы обслуживают домен"},
+    {"name": "status", "type": "string", "description": "состояние регистрации"},
+    {"name": "ips", "type": "string", "description": "адреса, на которые указывает домен"},
+    {"name": "mx", "type": "string", "description": "куда идёт почта домена"},
+    {"name": "archived", "type": "string", "description": "дата последней копии в веб-архиве"},
+    {"name": "country", "type": "string", "description": "страна адреса"},
+    {"name": "city", "type": "string", "description": "город адреса"},
+    {"name": "isp", "type": "string", "description": "провайдер"},
+    {"name": "org", "type": "string", "description": "организация, которой выделен адрес"},
+    {"name": "asn", "type": "string", "description": "автономная система"},
+    {"name": "reverse", "type": "string", "description": "обратное имя адреса"},
+    {"name": "ok", "type": "boolean", "description": "получилось ли что-то узнать"},
+    {"name": "error", "type": "string", "description": "что не так, если не получилось"}
+  ],
+  "primary": "q",
+  "short": {
+    "field": "ok",
+    "yes": "{kind} {subject} · {severity} · {description} · {registrar} · истекает {expires} · {ips} · копия {archived} · {city} {country} · {isp}",
+    "no": "не нашёл · {error}"
+  },
+  "cache_ttl": {"alive": 21600, "dead": 900},
+  "cost": "network",
+  "examples": [
+    {"params": {"q": "CVE-2021-44228"}, "note": "та самая дыра в log4j"},
+    {"params": {"q": "github.com"}, "note": "домен: владелец, сроки, куда указывает"},
+    {"params": {"q": "8.8.8.8"}, "note": "адрес: чей и откуда"}
+  ]
+}

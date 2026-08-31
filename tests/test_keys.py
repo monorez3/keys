@@ -931,9 +931,9 @@ def test_нелатинский_user_agent_объясняет_себя():
 
 
 def test_обычный_ключ_и_user_agent_проходят():
-    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.8")
+    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.3.0")
     assert k.token == "kx_ABCdef123-_"
-    assert k.user_agent == "monokeys/0.2.8"
+    assert k.user_agent == "monokeys/0.3.0"
 
 
 def test_пустое_значение_в_пути_не_затирает_именованный_параметр(monkeypatch):
@@ -1082,8 +1082,12 @@ def test_целевой_источник_побеждает_общую_спра�
     Формально похоже, по делу мимо. Найдено живым прогоном."""
     выбор = отв.подобрать("что значит слово ключ")
     по_примете = [и for и in отв.ДОВЕРИЕ if и in выбор and и not in отв.ВСЕГДА]
-    assert по_примете and по_примете[0] == "wiktionary"
-    assert отв.подобрать("погода в Хайфе")[-1] == "weather"
+    # у значения слова теперь два источника: словарь и Викисловарь
+    assert set(по_примете) == {"dict", "wiktionary"}
+    # и оба стоят раньше любой общей справки
+    порядок = отв.ДОВЕРИЕ.index
+    assert max(порядок(и) for и in по_примете) < min(порядок(и) for и in отв.ВСЕГДА)
+    assert "weather" in отв.подобрать("погода в Хайфе")
 
 
 ИЗВЕСТНЫЕ = {"USD", "ILS", "EUR", "RUB", "KZT", "UAH", "GEL", "AMD", "UZS", "KGS"}
@@ -1158,3 +1162,129 @@ def test_чистка_кэша_убирает_оба_слоя(tmp_path):
     кэш.clear()
     assert not кэш.mem
     assert кэш.get("к") is None
+
+
+def test_каждый_источник_описан_в_манифесте():
+    """Источник без описания в манифесте невидим: его нельзя ни выбрать
+    по имени, ни увидеть на странице ключа."""
+    ключ = discover(ROOT / "keys")["answer"]
+    описано = {r.name for r in ключ.manifest.returns}
+    for имя in отв.ВСЕ:
+        assert имя in описано, f"источник {имя} не описан в key.json"
+    assert set(ключ.manifest.only_selects["fields"]) == set(отв.ВСЕ)
+
+
+def test_порядок_доверия_покрывает_все_источники():
+    """Источник, забытый в ДОВЕРИИ, никогда не станет лучшим ответом."""
+    assert set(отв.ДОВЕРИЕ) == set(отв.ВСЕ)
+    assert len(отв.ДОВЕРИЕ) == len(отв.ВСЕ)
+
+
+@pytest.mark.parametrize(
+    "вопрос,ждём",
+    [("который час в Токио", "time"), ("what time in Tokyo", "time"),
+     ("столица Израиля", "country"), ("capital of Japan", "country"),
+     ("игра Counter-Strike", "steam"), ("море в Хайфе", "sea"),
+     ("паводок в Хайфе", "flood"), ("лекарство aspirin", "drug"),
+     ("meaning of the word key", "dict")],
+)
+def test_новые_темы_доходят_до_своих_источников(вопрос, ждём):
+    assert ждём in отв.подобрать(вопрос), вопрос
+
+
+def test_слово_темы_не_уезжает_в_источник():
+    """Карта не знает места «море в Хайфе», Steam не знает игру «игра X»."""
+    assert отв.без_темы(отв.суть("который час в Токио")) == "Токио"
+    assert отв.без_темы(отв.суть("море в Хайфе")) == "Хайфе"
+    assert отв.без_темы(отв.суть("игра Counter-Strike")) == "Counter-Strike"
+    assert отв.без_темы(отв.суть("capital of Japan")) == "Japan"
+
+
+def test_дата_вынимается_из_вопроса():
+    assert отв.дата_из("погода в Хайфе 2026-08-01") == "2026-08-01"
+    assert отв.дата_из("погода 01.08.2026") == "2026-08-01"
+    assert отв.дата_из("погода в Хайфе") == ""
+
+
+# --- ключ dev: уязвимость, домен, адрес ------------------------------------- #
+
+_спец_dev = importlib.util.spec_from_file_location(
+    "handler_dev", ROOT / "keys" / "dev" / "handler.py")
+dev = importlib.util.module_from_spec(_спец_dev)
+_спец_dev.loader.exec_module(dev)
+
+
+@pytest.mark.parametrize(
+    "вход,ждём",
+    [("CVE-2021-44228", ("cve", "CVE-2021-44228")),
+     ("cve 2021 44228", ("cve", "CVE-2021-44228")),
+     ("CVE-2014-0160", ("cve", "CVE-2014-0160")),
+     ("github.com", ("domain", "github.com")),
+     ("https://www.GitHub.com/x/y", ("domain", "github.com")),
+     ("monoblock.casa", ("domain", "monoblock.casa")),
+     ("8.8.8.8", ("ip", "8.8.8.8"))],
+)
+def test_dev_узнаёт_что_ему_дали(вход, ждём):
+    assert dev.распознать(вход) == ждём
+
+
+@pytest.mark.parametrize("мусор", ["", "   ", "монблан", "999.999.999.999", "просто слова"])
+def test_dev_отказывается_понятно(мусор):
+    with pytest.raises(ValueError):
+        dev.распознать(мусор)
+
+
+def test_dev_описан_полностью():
+    ключ = discover(ROOT / "keys")["dev"]
+    поля = {r.name for r in ключ.manifest.returns}
+    for обязательное in ["kind", "subject", "severity", "registrar", "ips", "country", "ok"]:
+        assert обязательное in поля
+    assert ключ.manifest.short["field"] in поля
+
+
+# --- ключ crypto ------------------------------------------------------------ #
+
+_спец_cr = importlib.util.spec_from_file_location(
+    "handler_crypto", ROOT / "keys" / "crypto" / "handler.py")
+crypto = importlib.util.module_from_spec(_спец_cr)
+_спец_cr.loader.exec_module(crypto)
+
+
+@pytest.mark.parametrize(
+    "вопрос,монета,валюты",
+    [("биткоин", "bitcoin", ["usd", "eur", "ils"]),
+     ("курс биткоина в шекелях", "bitcoin", ["ils"]),
+     ("ETH", "ethereum", ["usd", "eur", "ils"]),
+     ("solana в рублях", "solana", ["rub"]),
+     # у Toncoin имя в CoinGecko не совпадает с кодом: под «ton» сидит другая монета
+     ("курс тона", "the-open-network", ["usd", "eur", "ils"])],
+)
+def test_crypto_разбирает_монету_и_валюту(вопрос, монета, валюты):
+    assert crypto.разобрать(вопрос) == (монета, валюты)
+
+
+def test_crypto_отказывается_на_пустом():
+    with pytest.raises(ValueError):
+        crypto.разобрать("")
+
+
+def test_crypto_цены_разного_порядка():
+    """У монет цена бывает и десятками тысяч, и тысячными долями."""
+    assert crypto._красиво(78326.0) == "78 326"
+    assert crypto._красиво(0.3079) == "0.3079"
+    assert crypto._красиво(0.00000123) == "0.00000123"
+
+
+def test_crypto_занятость_не_выдаётся_за_отсутствие():
+    """CoinGecko отвечает 429 при частых запросах. Сказать «монета не нашлась»
+    было бы враньём — человек начнёт искать опечатку."""
+    class Ответ:
+        status = 429
+        text = "{}"
+
+    with pytest.raises(crypto.Занято):
+        crypto._проверить(Ответ())
+
+
+def test_все_ключи_на_месте():
+    assert set(discover(ROOT / "keys")) == {"alive", "answer", "crypto", "dev"}

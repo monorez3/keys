@@ -93,6 +93,37 @@ The amount, the currencies and their order are parsed out of the question.
 The language is detected from the question itself: Cyrillic goes to Russian
 sources, Latin to English ones.
 
+## `dev` — a vulnerability, a domain or an address
+
+```python
+k.dev.text("CVE-2021-44228")
+# cve CVE-2021-44228 · critical · Apache Log4j2 2.0-beta9 through 2.15.0 …
+
+k.dev.text("github.com")
+# domain github.com · MarkMonitor Inc. · expires 2026-10-09 · 140.82.121.3
+
+k.dev.text("8.8.8.8")
+# ip 8.8.8.8 · Ashburn United States · Google LLC
+```
+
+The key works out what you gave it: a CVE number, a domain and an IP address
+look nothing like each other. Three things a developer looks up constantly,
+opening three different sites every time.
+
+Open sources, no keys: CIRCL (a CVE database mirror), RDAP instead of the
+retired whois, DNS over Cloudflare, the Wayback Machine, ip-api.
+
+## `crypto` — what a coin costs
+
+```python
+k.crypto.text("bitcoin")     # Bitcoin · 78 293 USD · 24h +0.08% · rank 1
+k.crypto("ETH", vs="usd")
+```
+
+Deliberately separate from ordinary exchange rates: a currency has one central
+bank number per day, a coin has a price in several currencies at once, a 24-hour
+move and a market cap — and all of it changes by the minute.
+
 ## Three ways to call any key
 
 ```python

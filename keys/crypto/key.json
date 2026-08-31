@@ -1,0 +1,114 @@
+{
+  "id": "crypto",
+  "title": "Цена монеты",
+  "summary": "Курс криптовалюты сразу в нескольких валютах, с движением за сутки.",
+  "description": "Отдельно от обычных курсов намеренно. У валюты курс — одно число от центробанка, меняется раз в день. У монеты есть цена сразу в нескольких валютах, движение за сутки, объём торгов и капитализация, и всё это меняется ежеминутно. Складывать их в один ответ значило бы сделать хуже обоим. Понимает и коды (BTC, ETH), и слова — «биткоин», «эфир», «курс тона в шекелях». Источник — CoinGecko, открытый и без ключа, знает больше десяти тысяч монет.",
+  "tags": [
+    "деньги",
+    "крипта"
+  ],
+  "source": {
+    "project": "Ключи",
+    "note": "CoinGecko, открытый интерфейс без ключа"
+  },
+  "params": [
+    {
+      "name": "q",
+      "type": "string",
+      "required": true,
+      "description": "монета словом или кодом; можно сразу указать валюту",
+      "example": "биткоин"
+    },
+    {
+      "name": "vs",
+      "type": "string",
+      "required": false,
+      "description": "в каких валютах показать цену, через запятую",
+      "example": "usd,ils"
+    }
+  ],
+  "returns": [
+    {
+      "name": "coin",
+      "type": "string",
+      "description": "название монеты"
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "description": "биржевой код"
+    },
+    {
+      "name": "id",
+      "type": "string",
+      "description": "имя монеты в CoinGecko"
+    },
+    {
+      "name": "price",
+      "type": "string",
+      "description": "цена в запрошенных валютах"
+    },
+    {
+      "name": "change_24h",
+      "type": "string",
+      "description": "изменение за сутки"
+    },
+    {
+      "name": "market_cap",
+      "type": "string",
+      "description": "капитализация"
+    },
+    {
+      "name": "volume_24h",
+      "type": "string",
+      "description": "объём торгов за сутки"
+    },
+    {
+      "name": "rank",
+      "type": "integer",
+      "description": "место по капитализации"
+    },
+    {
+      "name": "ok",
+      "type": "boolean",
+      "description": "нашлась ли монета"
+    },
+    {
+      "name": "error",
+      "type": "string",
+      "description": "что не так, если не нашлась"
+    }
+  ],
+  "primary": "q",
+  "short": {
+    "field": "ok",
+    "yes": "{coin} · {price} · за сутки {change_24h} · место {rank}",
+    "no": "не нашёл · {error}"
+  },
+  "cache_ttl": {
+    "alive": 300,
+    "dead": 300
+  },
+  "cost": "network",
+  "examples": [
+    {
+      "params": {
+        "q": "биткоин"
+      },
+      "note": "цена сразу в долларах, евро и шекелях"
+    },
+    {
+      "params": {
+        "q": "курс тона в шекелях"
+      },
+      "note": "монета и валюта одной строкой"
+    },
+    {
+      "params": {
+        "q": "ETH",
+        "vs": "usd"
+      },
+      "note": "код монеты и одна валюта"
+    }
+  ]
+}

@@ -136,6 +136,46 @@
       "name": "error",
       "type": "string",
       "description": "что не так с вопросом, если не так"
+    },
+    {
+      "name": "dict",
+      "type": "string",
+      "description": "толкование английского слова: значение, часть речи, транскрипция"
+    },
+    {
+      "name": "sea",
+      "type": "string",
+      "description": "море рядом: высота волны, период, температура воды"
+    },
+    {
+      "name": "history",
+      "type": "string",
+      "description": "какая погода была в указанный день (дату писать в вопросе)"
+    },
+    {
+      "name": "flood",
+      "type": "string",
+      "description": "расход воды в ближайшей реке — грубый признак паводка"
+    },
+    {
+      "name": "time",
+      "type": "string",
+      "description": "который час и часовой пояс в этом месте"
+    },
+    {
+      "name": "country",
+      "type": "string",
+      "description": "страна: столица, население, валюта, площадь"
+    },
+    {
+      "name": "steam",
+      "type": "string",
+      "description": "игра в Steam: цена, платформы"
+    },
+    {
+      "name": "drug",
+      "type": "string",
+      "description": "лекарство по данным FDA: для чего, предупреждения"
     }
   ],
   "primary": "q",
@@ -194,6 +234,24 @@
         "q": "50000 рублей в тенге"
       },
       "note": "сумму и валюты ключ разберёт сам"
+    },
+    {
+      "params": {
+        "q": "который час в Токио"
+      },
+      "note": "время по координатам места"
+    },
+    {
+      "params": {
+        "q": "столица Израиля"
+      },
+      "note": "справочник стран"
+    },
+    {
+      "params": {
+        "q": "море в Хайфе"
+      },
+      "note": "волны и температура воды"
     }
   ],
   "only_selects": {
@@ -203,9 +261,17 @@
       "ddg",
       "wikidata",
       "wiktionary",
+      "dict",
       "osm",
       "weather",
+      "sea",
+      "history",
+      "flood",
+      "time",
+      "country",
       "rates",
+      "steam",
+      "drug",
       "crossref",
       "arxiv",
       "books",

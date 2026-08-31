@@ -160,6 +160,9 @@ class Cache:
     "api.duckduckgo.com": 10.0,
     "nominatim.openstreetmap.org": 1.0,   # их правила: не чаще одного в секунду
     "api.groq.com": 5.0,
+    # у CoinGecko бесплатный предел около 30 запросов в минуту, и он
+    # отвечает 429, а не замедлением. Держимся заметно ниже.
+    "api.coingecko.com": 0.3,
 }
 
 
@@ -191,7 +194,8 @@ class Context:
         self.bucket = bucket
         self.client = client
 
-    async def fetch(self, url: str, *, timeout: float = 15.0) -> Response:
+    async def fetch(self, url: str, *, timeout: float = 15.0,
+                    headers: dict | None = None) -> Response:
         """Один поход наружу, с одной повторной попыткой.
 
         Повтор не роскошь: самый первый запрос после холодного старта регулярно
@@ -211,7 +215,10 @@ class Context:
             await кран.take()
             try:
                 resp = await self.client.get(
-                    url, timeout=timeout, headers={"User-Agent": UA}, follow_redirects=True
+                    url, timeout=timeout, follow_redirects=True,
+                    # свои заголовки нужны источникам вроде DNS-over-HTTPS:
+                    # без Accept они отдают не то, что мы умеем разбирать
+                    headers={"User-Agent": UA, **(headers or {})},
                 )
                 return Response(status=resp.status_code, text=resp.text, url=str(resp.url))
             except httpx.TransportError as exc:
