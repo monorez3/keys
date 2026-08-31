@@ -41,7 +41,7 @@ import urllib.parse
 import urllib.request
 
 BASE = "https://monoblock.casa/keys"  # BASE-MARKER: подменяется при отдаче с сервера
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 
 __all__ = ["Keys", "Answer", "KeysError", "AccessDenied", "Unavailable"]
 

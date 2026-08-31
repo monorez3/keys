@@ -30,12 +30,31 @@ from urllib.parse import quote, urlencode
 # отдать четыре ответа из пяти, чем заставить человека ждать самого вялого.
 ЖДЁМ_ИСТОЧНИК = 8.0
 
+# Кому нужно больше: погода ходит дважды подряд (сначала карта за координатами,
+# потом метео), поэтому с общим пределом она проигрывала гонку и молчала.
+ЖДЁМ_ОСОБО = {"weather": 14.0, "arxiv": 12.0}
+
 ТЕГИ = re.compile(r"<[^>]+>")
 ВОПРОСИТЕЛЬНЫЕ = re.compile(
     r"^\s*(кто такой|кто такая|кто такие|что такое|что значит|что это|"
     r"где находится|где расположен\w*|где\s|расскажи про|расскажи о|"
-    r"who is|what is|where is|define)\s+", re.I
+    r"сколько будет|переведи|посчитай|"
+    r"who is|who was|what is|what are|what does|where is|where are|"
+    r"tell me about|how much is|how many|convert|define|definition of|"
+    r"meaning of|explain)\s+", re.I
 )
+
+
+КИРИЛЛИЦА = re.compile(r"[а-яёА-ЯЁ]")
+
+
+def язык_вопроса(вопрос: str) -> str:
+    """Русскими буквами — русские источники, латиницей — английские.
+
+    Без этого «who is Pavel Durov» шёл в русскую Википедию и находил там
+    заметно меньше, чем в английской.
+    """
+    return "ru" if КИРИЛЛИЦА.search(вопрос) else "en"
 
 
 def без_ударений(текст: str) -> str:
@@ -57,10 +76,15 @@ def _чисто(текст: str | None, предел: int = 400) -> str:
 
 
 ТЕМЫ = re.compile(
-    r"^\s*(погода\s+(в|на)?|weather\s+in|курс\s+|книга\s+|роман\s+|book\s+|"
-    r"пакет\s+|библиотека\s+|package\s+|pypi\s+|npm\s+|репозиторий\s+|github\s+|"
+    r"^\s*(погода\s+(в|на)?\s*|weather\s+(in|at)?\s*|температура\s+(в|на)?\s*|"
+    r"курс\s+|обмен\s+|exchange\s+rate\s+(of|for)?\s*|rate\s+of\s+|"
+    r"книга\s+|роман\s+|book\s+|novel\s+|"
+    r"пакет\s+|библиотека\s+|package\s+|library\s+|pypi\s+|npm\s+|"
+    r"репозиторий\s+|repo\s+|repository\s+|github\s+|"
     r"стать[ияю]\s+(про|о)?\s*|исследовани[ея]\s+(про|о)?\s*|"
-    r"что\s+значит\s+слово\s+|значение\s+слова\s+|слово\s+)", re.I
+    r"paper[s]?\s+(on|about)?\s*|article[s]?\s+(on|about)?\s*|"
+    r"research\s+(on|about)?\s*|study\s+(on|about)?\s*|"
+    r"что\s+значит\s+слово\s+|значение\s+слова\s+|слово\s+|word\s+)", re.I
 )
 
 
@@ -71,6 +95,8 @@ def без_темы(вопрос: str) -> str:
     «пакет monokeys». Тему уже распознали приметами — источнику она мешает.
     """
     очищено = ТЕМЫ.sub("", вопрос).strip(" ?!.,")
+    # артикль — не часть названия: «the word key» ищется как «word key»
+    очищено = re.sub(r"^(the|a|an)\s+", "", очищено, flags=re.I).strip()
     return очищено or вопрос
 
 
@@ -126,17 +152,67 @@ async def _wikidata(в: str, язык: str, ctx) -> tuple[str, str]:
     return _чисто(текст), f"https://www.wikidata.org/wiki/{п.get('id', '')}"
 
 
+ЗАГОЛОВОК = re.compile(r"^\s*=+.*=+\s*$")
+ЗНАЧЕНИЕ = re.compile(
+    r"(значени[ея]|meaning|noun|verb|adjective|adverb|pronoun|interjection)", re.I
+)
+# «key (plural keys)» — это словоформа, а не толкование: у английских статей
+# она стоит первой строкой раздела, а само значение идёт следующей
+СЛОВОФОРМА = re.compile(
+    r"\((?:[^)]*\b(plural|countable|uncountable|comparative|superlative|"
+    r"singular|third-person|past tense)\b[^)]*)\)", re.I
+)
+СЛУЖЕБНОЕ = re.compile(
+    r"^(морфологическ|синтаксическ|произношение|семантическ|этимологи|"
+    r"pronunciation|etymology|declension|conjugation|anagrams|references|"
+    r"alternative forms|see also|translations)", re.I
+)
+
+
+def _толкование(выдержка: str) -> str:
+    """Из статьи Викисловаря — само значение, а не оглавление и не грамматика.
+
+    Викисловарь отдаёт статью целиком: разделы «Морфологические свойства»,
+    «Произношение», «Значение» и так далее. Человеку нужен раздел со
+    значением; всё остальное — про то, как слово склоняется, а не что оно
+    означает. Поэтому сначала ищем нужный раздел и берём первую строку
+    после него, и только если его нет — довольствуемся первой осмысленной.
+    """
+    строки = [с.strip() for с in (выдержка or "").splitlines()]
+
+    def годится(строка: str) -> bool:
+        return (bool(строка) and not ЗАГОЛОВОК.match(строка)
+                and len(строка) >= 12 and not СЛОВОФОРМА.search(строка))
+
+    # раздел со значением: у русских статей «Значение», у английских — часть речи
+    for i, строка in enumerate(строки):
+        if ЗАГОЛОВОК.match(строка) and ЗНАЧЕНИЕ.search(строка):
+            for следом in строки[i + 1:]:
+                if ЗАГОЛОВОК.match(следом):
+                    break
+                if годится(следом):
+                    return _чисто(следом, 300)
+
+    for строка in строки:
+        if годится(строка) and not СЛУЖЕБНОЕ.match(строка):
+            return _чисто(строка, 300)
+    return ""
+
+
 async def _wiktionary(в: str, язык: str, ctx) -> tuple[str, str]:
     очищено = без_темы(суть(в))
     слово = очищено.split()[-1] if очищено else в
     данные = json.loads((await ctx.fetch(
         f"https://{язык}.wiktionary.org/w/api.php?" + urlencode({
+            # exintro тут нельзя: у статей Викисловаря нет вводного раздела,
+            # и с ним ответ всегда пустой — толкование лежит дальше
             "action": "query", "prop": "extracts", "titles": слово,
-            "explaintext": 1, "exintro": 1, "format": "json"}))).text)
+            "explaintext": 1, "format": "json"}))).text)
     страницы = данные.get("query", {}).get("pages", {})
     for стр in страницы.values():
-        if стр.get("extract"):
-            return _чисто(стр["extract"], 300), f"https://{язык}.wiktionary.org/wiki/{quote(слово)}"
+        толкование = _толкование(стр.get("extract", ""))
+        if толкование:
+            return толкование, f"https://{язык}.wiktionary.org/wiki/{quote(слово)}"
     return "", ""
 
 
@@ -185,32 +261,104 @@ async def _weather(в: str, язык: str, ctx) -> tuple[str, str]:
             f"влажность {т.get('relative_humidity_2m')}%", "https://open-meteo.com/")
 
 
+ВАЛЮТЫ = {
+    "USD": ("доллар", "dollar", "бакс", "usd", "$"),
+    "EUR": ("евро", "euro", "eur", "€"),
+    "ILS": ("шекел", "shekel", "ils", "₪"),
+    "GBP": ("фунт", "pound", "gbp", "£"),
+    "JPY": ("иен", "yen", "jpy", "¥"),
+    "CHF": ("франк", "franc", "chf"),
+    "CNY": ("юан", "yuan", "cny"),
+    "TRY": ("лир", "lira", "try"),
+    "PLN": ("злот", "zloty", "pln"),
+    "CZK": ("крон", "koruna", "czk"),
+    "INR": ("рупи", "rupee", "inr"),
+    "SEK": ("шведск", "sek"),
+    "NOK": ("норвежск", "nok"),
+    "AUD": ("австралийск", "aud"),
+    "CAD": ("канадск", "cad"),
+}
+# ЕЦБ публикует не всё: рубля у него нет с 2022 года. Молчать об этом нельзя —
+# человек решит, что сломались мы.
+НЕТ_У_ЕЦБ = {"RUB": ("рубл", "ruble", "rouble", "rub", "₽")}
+
+ЧИСЛО = re.compile(r"(\d[\d\s ]*(?:[.,]\d+)?)")
+
+
+def валюты_из(текст: str) -> tuple[list[str], list[str]]:
+    """Найти валюты в вопросе в том порядке, в каком они написаны.
+
+    Порядок важен: «100 долларов в шекели» — это из USD в ILS, а не наоборот.
+    Возвращает найденные коды и отдельно те, которых у ЕЦБ нет.
+    """
+    низ = текст.lower()
+    попадания: list[tuple[int, str]] = []
+    пропущенные: list[str] = []
+
+    for код, формы in {**ВАЛЮТЫ, **НЕТ_У_ЕЦБ}.items():
+        место = min((низ.find(ф) for ф in формы if ф in низ), default=-1)
+        if место >= 0:
+            if код in НЕТ_У_ЕЦБ:
+                пропущенные.append(код)
+            else:
+                попадания.append((место, код))
+
+    return [код for _, код in sorted(попадания)], пропущенные
+
+
+def сумма_из(текст: str) -> float:
+    """«100 долларов» -> 100. Числа с пробелами и запятой тоже считаются."""
+    найдено = ЧИСЛО.search(текст)
+    if not найдено:
+        return 1.0
+    очищено = найдено.group(1).replace(" ", "").replace(" ", "").replace(",", ".")
+    try:
+        return float(очищено)
+    except ValueError:
+        return 1.0
+
+
+def _красиво(число: float) -> str:
+    """Деньги пишем без хвоста нулей: 297.28, но 100, а не 100.00."""
+    строка = f"{число:,.2f}".replace(",", " ")
+    return строка.rstrip("0").rstrip(".") if "." in строка else строка
+
+
 async def _rates(в: str, язык: str, ctx) -> tuple[str, str]:
-    """Курс валют по данным Европейского центробанка."""
-    # по-русски валюты склоняются: «доллара к шекелю» — это USD и ILS,
-    # а точный список форм пришлось бы писать бесконечно
-    валюты = re.findall(r"\b([A-Z]{3}|доллар\w*|евро|шекел\w*|рубл\w*|фунт\w*|иен\w*)\b",
-                        в, re.I)
-    основы = {"доллар": "USD", "евро": "EUR", "шекел": "ILS", "рубл": "RUB",
-              "фунт": "GBP", "иен": "JPY"}
+    """Курс и пересчёт суммы по данным Европейского центробанка.
 
-    def код(слово: str) -> str:
-        низ = слово.lower()
-        for основа, знак in основы.items():
-            if низ.startswith(основа):
-                return знак
-        return слово.upper()
+    Умеет не только «курс доллара», но и «100 долларов в шекели» и
+    «100 usd to eur ils» — сумму подставляет сам, целей может быть несколько.
+    """
+    коды, пропущенные = валюты_из(в)
 
-    коды = [код(с) for с in валюты][:2]
     if len(коды) < 2:
+        if пропущенные and коды:
+            нет = ", ".join(пропущенные)
+            return (f"{нет} Европейский центробанк не публикует — пересчитать не через что",
+                    "https://frankfurter.dev/")
         return "", ""
-    # frankfurter.app отвечает редиректом на .dev — ходим сразу куда надо
-    п = json.loads((await ctx.fetch("https://api.frankfurter.dev/v1/latest?" + urlencode({
-        "from": коды[0], "to": коды[1]}))).text)
-    ставка = п.get("rates", {}).get(коды[1])
-    if ставка is None:
+
+    откуда, куда = коды[0], коды[1:4]
+    сумма = сумма_из(в)
+
+    ответ = await ctx.fetch("https://api.frankfurter.dev/v1/latest?" + urlencode({
+        "amount": сумма, "base": откуда, "symbols": ",".join(куда)}))
+    п = json.loads(ответ.text)
+    ставки = п.get("rates", {})
+    if not ставки:
         return "", ""
-    return f"1 {коды[0]} = {ставка} {коды[1]} (на {п.get('date')}, ЕЦБ)", "https://frankfurter.dev/"
+
+    части = [f"{_красиво(сумма)} {откуда} = " + ", ".join(
+        f"{_красиво(знач)} {код}" for код, знач in ставки.items())]
+    if сумма != 1:
+        первый = куда[0]
+        части.append(f"курс {_красиво(ставки[первый] / сумма)}")
+    части.append(f"на {п.get('date')}, ЕЦБ")
+    if пропущенные:
+        части.append(f"{', '.join(пропущенные)} у ЕЦБ нет")
+
+    return " · ".join(части), "https://frankfurter.dev/"
 
 
 async def _crossref(в: str, язык: str, ctx) -> tuple[str, str]:
@@ -315,15 +463,20 @@ def похоже(вопрос: str, ответ: str) -> bool:
 ВСЕГДА = ["wiki", "ddg", "wikidata"]  # общая справка спрашивается при любом вопросе
 
 ПРИМЕТЫ = [
-    (r"погода|weather|температур", ["weather"]),
-    (r"курс|\b(usd|eur|ils|rub|gbp)\b|доллар|евро|шекел|рубл", ["rates"]),
-    (r"\bгде\b|город|улиц|адрес|страна|where is", ["osm"]),
-    (r"пакет|библиотек|package|pypi|pip install", ["pypi", "npm"]),
-    (r"\bnpm\b|node|javascript", ["npm"]),
-    (r"репозитор|github|исходник", ["github"]),
-    (r"стать|исследован|paper|doi|препринт|arxiv|наук", ["crossref", "arxiv"]),
-    (r"книг|роман|book|автор", ["books"]),
-    (r"что значит|значение слова|define|перевод слова", ["wiktionary"]),
+    (r"погода|температур|weather|temperature|forecast", ["weather"]),
+    (r"курс|обмен|доллар|евро|шекел|рубл|фунт|иен|"
+     r"exchange|convert|dollar|euro|shekel|pound|yen|"
+     r"\b(usd|eur|ils|rub|gbp|jpy|chf|cny)\b", ["rates"]),
+    (r"\bгде\b|город|улиц|адрес|страна|координат|"
+     r"\bwhere\b|\bcity\b|street|address|country|location", ["osm"]),
+    (r"пакет|библиотек|package|library|pypi|pip install", ["pypi", "npm"]),
+    (r"\bnpm\b|node|javascript|typescript", ["npm"]),
+    (r"репозитор|исходник|github|\brepo\b|repository|source code", ["github"]),
+    (r"стать|исследован|препринт|наук|"
+     r"paper|article|research|study|doi|arxiv|preprint|science", ["crossref", "arxiv"]),
+    (r"книг|роман|автор|\bbook\b|novel|author|isbn", ["books"]),
+    (r"что значит|значение слова|перевод слова|"
+     r"define|definition|meaning of|\bword\b", ["wiktionary"]),
 ]
 
 
@@ -364,7 +517,7 @@ def canonical(params: dict) -> dict:
     if len(вопрос) > 300:
         raise ValueError("вопрос длиннее 300 символов — это уже не вопрос")
 
-    язык = (params.get("lang") or "ru").strip().lower()
+    язык = (params.get("lang") or язык_вопроса(вопрос)).strip().lower()
     if язык not in ("ru", "en"):
         raise ValueError(f"язык {язык!r} не поддержан; есть: ru, en")
 
@@ -382,7 +535,8 @@ async def run(params: dict, ctx) -> dict:
     async def спросить(имя: str):
         try:
             return имя, await asyncio.wait_for(
-                ИСТОЧНИКИ[имя](вопрос, язык, ctx), timeout=ЖДЁМ_ИСТОЧНИК)
+                ИСТОЧНИКИ[имя](вопрос, язык, ctx),
+                timeout=ЖДЁМ_ОСОБО.get(имя, ЖДЁМ_ИСТОЧНИК))
         except Exception:
             # упавший или задумавшийся источник не роняет весь ответ:
             # остальные уже принесли своё, три ответа лучше одной ошибки
@@ -400,8 +554,15 @@ async def run(params: dict, ctx) -> dict:
     }
     ссылки = [с for _, с in собрано.values() if с]
 
+    # Источник, выбранный по примете в вопросе, отвечает именно на то, о чём
+    # спросили, — он и должен побеждать общую справку. Спросили про значение
+    # слова, а лучшей оказывалась Википедия со статьёй «Значение»: формально
+    # похоже, по делу мимо.
+    по_примете = [и for и in ДОВЕРИЕ if и in выбор and и not in ВСЕГДА]
+    остальные = [и for и in ДОВЕРИЕ if и not in по_примете]
+
     лучший, откуда = "", ""
-    for имя in ДОВЕРИЕ:
+    for имя in по_примете + остальные:
         if ответы.get(имя):
             лучший, откуда = ответы[имя], имя
             break

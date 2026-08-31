@@ -931,9 +931,9 @@ def test_нелатинский_user_agent_объясняет_себя():
 
 
 def test_обычный_ключ_и_user_agent_проходят():
-    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.5")
+    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.6")
     assert k.token == "kx_ABCdef123-_"
-    assert k.user_agent == "monokeys/0.2.5"
+    assert k.user_agent == "monokeys/0.2.6"
 
 
 def test_пустое_значение_в_пути_не_затирает_именованный_параметр(monkeypatch):
@@ -1075,3 +1075,39 @@ def test_все_объявленные_источники_существуют()
     ключ = discover(ROOT / "keys")["answer"]
     объявлено = set(ключ.manifest.only_selects["fields"])
     assert объявлено == set(отв.ВСЕ), f"разошлось: {объявлено ^ set(отв.ВСЕ)}"
+
+
+def test_целевой_источник_побеждает_общую_справку():
+    """Спросили про значение слова — победила Википедия со статьёй «Значение».
+    Формально похоже, по делу мимо. Найдено живым прогоном."""
+    выбор = отв.подобрать("что значит слово ключ")
+    по_примете = [и for и in отв.ДОВЕРИЕ if и in выбор and и not in отв.ВСЕГДА]
+    assert по_примете and по_примете[0] == "wiktionary"
+    assert отв.подобрать("погода в Хайфе")[-1] == "weather"
+
+
+def test_валюты_и_суммы_разбираются():
+    assert отв.валюты_из("100 долларов в шекели")[0] == ["USD", "ILS"]
+    assert отв.валюты_из("100 usd to eur")[0] == ["USD", "EUR"]
+    assert отв.сумма_из("100 долларов") == 100.0
+    assert отв.сумма_из("курс доллара") == 1.0
+    # ЕЦБ не публикует рубль — молчать об этом нельзя
+    коды, нет_у_ецб = отв.валюты_из("курс рубля к доллару")
+    assert нет_у_ецб == ["RUB"] and коды == ["USD"]
+
+
+def test_язык_вопроса_определяется_сам():
+    assert отв.язык_вопроса("кто такой Дуров") == "ru"
+    assert отв.язык_вопроса("who is Durov") == "en"
+
+
+@pytest.mark.parametrize(
+    "по_русски,по_английски",
+    [("погода в Хайфе", "weather in Haifa"), ("где находится Хайфа", "where is Haifa"),
+     ("пакет requests", "package requests"), ("репозиторий telegram", "repository telegram"),
+     ("книга Мастер и Маргарита", "book Master and Margarita"),
+     ("что значит слово ключ", "meaning of the word key"),
+     ("статьи про кватернионы", "papers about quaternions")],
+)
+def test_оба_языка_выбирают_одни_источники(по_русски, по_английски):
+    assert set(отв.подобрать(по_русски)) == set(отв.подобрать(по_английски))
