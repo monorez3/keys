@@ -1,6 +1,8 @@
-# Ключи
+**English** · [Русский](README.ru.md)
 
-Маленькие умные функции, которые зовутся одним вызовом. Живут здесь:
+# Keys
+
+Small smart functions, each callable in one line. Live at
 **https://monoblock.casa/keys/**
 
 ```bash
@@ -10,300 +12,312 @@ pip install monokeys
 ```python
 from monokeys import Keys
 
-k = Keys()                                    # настраивать нечего
+k = Keys()                                    # nothing to configure
 
 print(k.alive.text("@durov"))
-# жив · channel · Pavel Durov · 10 998 851 subscribers
+# alive · channel · Pavel Durov · 10 998 851 subscribers
 
-print(k.answer.text("погода в Хайфе"))
-# Хайфе: 28.9°C, ветер 2.6 м/с, влажность 58% · источник: weather
+print(k.answer.text("weather in Haifa"))
+# Haifa: 27.4°C, wind 8.0 m/s, humidity 68% · source: weather
 ```
 
-Ни регистрации, ни ключа доступа, ни лимита: клиент сам берёт публичный ключ,
-а он бессрочный и без счётчика.
+No signup, no access key, no quota: the client picks up the public key itself,
+and that key never expires and is never metered.
 
-## `alive` — жив ли канал
+## `alive` — is this Telegram link alive?
+
+No account, no Bot API, no token: it reads the public `t.me` preview page — the
+same one messengers use to draw a link card.
 
 ```python
-k.alive("@durov")                  # весь ответ объектом
-k.alive.members_count("@durov")    # 11005185 — только число, уже числом
+k.alive("@durov")                  # the whole answer as an object
+k.alive.members_count("@durov")    # 11005185 — just the number, already an int
 k.alive.kind("ru_python")          # group
-k.alive.text("@BotFather")         # жив · bot · BotFather · 8 705 765 monthly users
+k.alive.verified("@BotFather")     # True
 ```
 
-Понимает всё, чем ссылка бывает: `@durov`, `t.me/durov`, `t.me/durov/123`,
-`t.me/s/durov`, `t.me/+AbCdEf…`, `t.me/joinchat/…`, `DUROV`.
+Understands every shape a link comes in: `@durov`, `t.me/durov`,
+`t.me/durov/123`, `t.me/s/durov`, `t.me/+AbCdEf…`, `t.me/joinchat/…`, `DUROV`.
 
-Возвращает: `is_alive`, `kind` (channel / group / bot / user), `title`,
+Returns: `is_alive`, `kind` (channel / group / bot / user), `title`,
 `description`, `members_count`, `members_label`, `online_count`, `verified`,
 `is_private`, `needs_request`, `restricted`, `has_preview`, `avatar_url`,
 `deep_link`, `action`, `username`, `url`, `error`.
 
-Главная тонкость, из-за которой наивная проверка врёт: на удалённый канал
-Telegram отвечает `200` и рисует заглушку. Живой от мёртвого отличается
-разметкой, а не кодом ответа.
+The subtlety that makes naive checks lie: Telegram answers `200` for a deleted
+channel and renders a placeholder. Alive and dead differ in the markup, not in
+the status code.
 
-## `answer` — ответ из многих источников разом
+## `answer` — one question, many sources at once
 
 ```python
-k.answer.text("кто такой Павел Дуров")
-# Па́вел Вале́рьевич Ду́ров — российский и эмиратский предприниматель… · источник: wiki
+k.answer.text("who is Pavel Durov")
+# Pavel Valeryevich Durov is a technology entrepreneur… · source: ddg
 
-k.answer.text("погода в Хайфе")     # Хайфе: 28.9°C, ветер 2.6 м/с · источник: weather
-k.answer.text("курс доллара к шекелю")  # 1 USD = 2.9728 ILS (ЕЦБ) · источник: rates
-k.answer("Хайфа", sources="osm,wiki")   # только карта и Википедия
+k.answer.text("weather in Haifa")        # Haifa: 27.4°C, wind 8.0 m/s
+k.answer.text("100 usd to eur")          # 100 USD = 86.23 EUR · rate 0.86
+k.answer("Haifa", sources="osm,wiki")    # only the map and Wikipedia
 ```
 
-Вопрос уходит **сразу в несколько мест**, каждое отвечает своим полем, отдельно
-называется лучший ответ и ссылки для проверки. Если `sources` не указать, ключ
-смотрит на вопрос и выбирает сам: про город — карту, про валюту — курсы, про
-пакет — реестры пакетов; общая справка спрашивается всегда.
+The question goes to several places **in parallel**, each answers in its own
+field, and the best one is named separately along with links you can check it
+against. Leave `sources` out and the key reads the question and decides for
+itself: a city goes to the map, a currency to exchange rates, a package to the
+package registries. General reference is always asked.
 
-Тринадцать источников, **ни одного платного ключа**: Википедия, Викиданные,
-Викисловарь, DuckDuckGo, OpenStreetMap, Open-Meteo, курсы валют, Crossref, arXiv,
+Thirteen sources, **not a single paid key**: Wikipedia, Wikidata, Wiktionary,
+DuckDuckGo, OpenStreetMap, Open-Meteo, exchange rates, Crossref, arXiv,
 Open Library, PyPI, npm, GitHub.
 
-Чего тут нет намеренно: **моделей** — все бесплатные упираются в лимит, а их
-ответ нечем проверить; и **выдачи поисковиков** — её нельзя брать по их
-правилам, а IP у сервера один на все продукты.
+What is deliberately absent: **language models** — every free one runs into a
+quota, and there is no way to check what a model says; and **search engine
+results** — scraping them is against their terms, and the server's IP is shared
+by a dozen other products, so one ban would take everything down.
 
-### Спросить именно тот источник, который нужен
+### Ask exactly the source you want
 
-Каждый источник — отдельный метод. Одно и то же слово, разные ответы:
+Every source is a method of its own. Same word, different answers:
 
 ```python
-k.answer.weather("Хайфа")   # Хайфа: 27.7°C, ветер 6.5 м/с, влажность 65%
-k.answer.osm("Хайфа")       # Хайфа, נפת חיפה, Хайфский округ, Израиль
-k.answer.wiki("Хайфа")      # Ха́йфа — третий по величине город Израиля…
-k.answer.wikidata("Хайфа")  # Хайфа — город на севере Израиля
-k.answer.rates("доллар к шекелю")   # 1 USD = 2.9728 ILS (ЕЦБ)
+k.answer.weather("Haifa")   # Haifa: 27.4°C, wind 8.0 m/s, humidity 68%
+k.answer.osm("Haifa")       # Haifa, Haifa Subdistrict, Haifa District, Israel
+k.answer.wiki("Haifa")      # Haifa is the third-largest city in Israel…
+k.answer.wikidata("Haifa")  # Haifa — city in northern Israel
+k.answer.rates("100 usd to eur")    # 100 USD = 86.23 EUR
 k.answer.github("telegram")         # DrKLO/Telegram ★29798
 ```
 
-То же самое ссылкой: `?only=weather` или `?sources=weather`.
+Over a plain link: `?only=weather` or `?sources=weather`.
 
-Просить поле источника — это и значит спросить сам источник: слова «погода»
-в вопросе может не быть, а погоду вы всё равно хотите.
+Asking for a source's field *is* asking that source: the word "weather" may not
+appear in your question, and you still want the weather.
 
-### Умные курсы
-
-```python
-k.answer.rates("100 долларов в шекели")
-# 100 USD = 297.28 ILS · курс 2.97 · на 2026-08-28, ЕЦБ
-
-k.answer.rates("сколько будет 50 евро в шекелях и долларах")
-# 50 EUR = 173.06 ILS, 58.22 USD · курс 3.46 · на 2026-08-28, ЕЦБ
-
-k.answer.rates("100 usd to eur")     # то же самое по-английски
-```
-
-Сумму, валюты и их порядок ключ разбирает сам: «100 долларов **в** шекели» —
-это из USD в ILS, а не наоборот. Целей может быть несколько.
-Курсы понимают сумму, порядок и **166 валют** — рубль, гривну, тенге, лари,
-драм и всё остальное; словами или трёхбуквенным кодом:
+### Exchange rates that do the math
 
 ```python
-k.answer.rates("50000 рублей в тенге")     # 50 000 RUB = 269 671.85 KZT · курс 5.39
-k.answer.rates("1000 гривен в рублях и долларах")
-k.answer.rates("100 UZS в KGS")            # код работает для всех 166
+k.answer.rates("100 dollars to shekels")
+# 100 USD = 299.24 ILS · rate 2.99 · as of Mon, 31 Aug 2026
+
+k.answer.rates("50 eur to ils and usd")
+# 50 EUR = 173.06 ILS, 58.22 USD · rate 3.46
+
+k.answer.rates("100 UZS to KGS")     # three-letter codes work for all 166
 ```
 
+The amount, the currencies and their order are parsed out of the question:
+"100 dollars **to** shekels" means USD into ILS, not the other way round. There
+can be several targets. **166 currencies**, including ones the European Central
+Bank does not publish at all.
 
-### Работает на двух языках
+### Works in two languages
 
-Язык определяется по самому вопросу: русскими буквами — русские источники,
-латиницей — английские. Приметы и слова темы разобраны на обоих:
+The language is detected from the question itself: Cyrillic goes to Russian
+sources, Latin to English ones. Hints and topic words are covered on both sides:
 
 ```python
-k.answer.text("погода в Хайфе")   ==  k.answer.text("weather in Haifa")   # оба идут в погоду
-k.answer.text("где находится Хайфа") ==  k.answer.text("where is Haifa")  # оба идут на карту
+k.answer.text("погода в Хайфе")  ==  k.answer.text("weather in Haifa")   # both go to weather
+k.answer.text("где находится Хайфа") == k.answer.text("where is Haifa")  # both go to the map
 ```
 
-### Чем `wiki` отличается от `wikidata`
+### How `wiki` differs from `wikidata`
 
-Это разные вещи, и полезны они в разных случаях:
+They are different things, useful in different situations:
 
-| | что это | пример на «Хайфа» |
+| | what it is | for "Haifa" |
 | --- | --- | --- |
-| `wiki` | сводка статьи, написанная людьми — связный текст на несколько предложений | Ха́йфа — третий по величине город Израиля после Иерусалима и Тель-Авива, со смешанным еврейско-арабским населением… |
-| `wikidata` | структурированный факт: название и одна строка «что это за сущность», плюс код вида Q42 | Хайфа — город на севере Израиля, третий по величине город страны |
+| `wiki` | an article summary written by people — connected prose, a few sentences | Haifa is the third-largest city in Israel, after Jerusalem and Tel Aviv, with a mixed Jewish-Arab population… |
+| `wikidata` | a structured fact: a label plus one line of "what kind of thing this is", plus a Q-code | Haifa — city in northern Israel, third-largest in the country |
 
-Проще так: `wiki` — прочитать, `wikidata` — разобрать программой. Второй короче,
-одинаков на всех языках и удобен, когда нужно понять **тип** вещи, а не её
-описание.
+Put simply: `wiki` is for reading, `wikidata` is for parsing. The second one is
+shorter, identical across languages, and useful when you need the **type** of a
+thing rather than its description.
 
-## Аргументы библиотеки
+## Library arguments
 
 ```python
 Keys(token=…, base=…, timeout=…, retries=…, user_agent=…)
-k.alive(значение, only=…, fmt=…, timeout=…, **параметры)
+k.alive(value, only=…, fmt=…, timeout=…, **params)
 ```
 
-| Аргумент | По умолчанию | Что делает |
+| Argument | Default | What it does |
 | --- | --- | --- |
-| `token` | публичный ключ с сервера | свой ключ доступа, если он нужен |
-| `base` | `https://monoblock.casa/keys` | адрес сервера |
-| `timeout` | `20.0` | сколько ждать ответа, секунд |
-| `retries` | `1` | повторов при обрыве связи |
-| `only` | — | вернуть только это поле |
-| `fmt` | `json` | `json`, `text` (строка для человека) или `bool` |
+| `token` | the public key from the server | your own access key, if you want one |
+| `base` | `https://monoblock.casa/keys` | server address |
+| `timeout` | `20.0` | how long to wait for an answer, seconds |
+| `retries` | `1` | retries on a dropped connection |
+| `only` | — | return just this field |
+| `fmt` | `json` | `json`, `text` (a line for humans) or `bool` |
 
-Опечатка не молчит: `k.alive.members_cout(...)` сразу скажет, что такого поля
-нет, и покажет список настоящих. Имена ключей и полей приходят с сервера, так
-что новый ключ доступен сразу, без обновления пакета.
+Typos do not stay silent: `k.alive.members_cout(...)` says immediately that
+there is no such field and lists the real ones. Key and field names come from
+the server, so a new key is available at once, without updating the package.
 
-Полное описание с примерами: **https://monoblock.casa/keys/client**
+Full reference with examples: **https://monoblock.casa/keys/client**
 
-## Можно вообще без библиотеки
+## You can skip the library entirely
 
-Ключ — это обычная ссылка, её открывает что угодно:
+A key is just a link — anything can open it:
 
 ```
-https://monoblock.casa/keys/alive/@durov   ->  жив · channel · Pavel Durov · …
+https://monoblock.casa/keys/alive/@durov   ->  alive · channel · Pavel Durov · …
 ```
 
 ```php
 echo file_get_contents("https://monoblock.casa/keys/alive/@durov");
 ```
 
-Добавьте `?fmt=json` — придут все поля, `?only=members_count` — только число,
-`?fmt=bool` — голое `true`/`false`. На странице каждого ключа лежит готовый код
-под curl, Python, JavaScript, C++, Go и PHP.
+Add `?fmt=json` for all the fields, `?only=members_count` for a single number,
+`?fmt=bool` for a bare `true`/`false`. Every key's page carries ready-made code
+for curl, Python, JavaScript, C++, Go and PHP.
 
-## В ассистента
+## Inside an assistant
 
-Один адрес — и все ключи появляются внутри Claude, Cursor или редактора как
-обычные инструменты:
+One address, and every key shows up inside Claude, Cursor or your editor as an
+ordinary tool:
 
 ```json
 { "mcpServers": { "keys": { "url": "https://monoblock.casa/keys/mcp" } } }
 ```
 
-## Ключ доступа
+## Access keys
 
-Заводить не нужно: публичный ключ работает у всех и без счётчика, библиотека
-берёт его сама через `/public-token`. Он не зашит в пакет намеренно — так его
-можно сменить одной командой, и у всех обновится без нового релиза.
+You do not need one: the public key works for everybody and is never metered,
+and the library fetches it itself from `/public-token`. It is deliberately not
+baked into the package — that way it can be rotated with one command and
+everyone picks up the new one without a release.
 
-Свой ключ нужен только тем, кто хочет собственный рубильник. Выдаёт владелец:
+Your own key is only for those who want a kill switch of their own. The owner
+issues them:
 
 ```bash
 curl -X POST -H "X-Admin-Token: $KEYS_ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"кому": "форум overclockers.ru"}' https://monoblock.casa/keys/token
+     -d '{"label": "forum overclockers.ru"}' https://monoblock.casa/keys/token
 
 curl -H "X-Admin-Token: $KEYS_ADMIN_TOKEN" https://monoblock.casa/keys/tokens
 
 curl -X POST -H "X-Admin-Token: $KEYS_ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"id": "a11ea8e0ea55"}' https://monoblock.casa/keys/token/revoke
+
+# forget cached answers after changing a key
+curl -X POST -H "X-Admin-Token: $KEYS_ADMIN_TOKEN" https://monoblock.casa/keys/cache/clear
 ```
 
-Выданный ключ бессрочный и без счётчика — считать чужие запросы никто не
-собирается. Вместо квоты рубильник: отзыв по публичному id, мгновенно и не
-трогая остальные.
+An issued key never expires and is never counted — nobody here intends to meter
+anyone's requests. Instead of a quota there is a kill switch: revoke by public
+id, instantly, without touching the other keys.
 
 ---
 
-# Для тех, кто хочет добавить свой ключ
+# If you want to add a key of your own
 
-## Как устроено
+## How it is put together
 
-Ключ — это одна папка. Из её манифеста сами собой получаются: HTTP-эндпоинт,
-инструмент MCP, страница документации, `openapi.json`, `llms.txt` и примеры
-кода на шести языках. Руками ничего из этого не пишут.
+A key is one folder. Out of its manifest come, by themselves: the HTTP
+endpoint, the MCP tool, the documentation page, `openapi.json`, `llms.txt` and
+code examples in six languages. None of that is written by hand.
 
 ```
 keys/
-  мой-ключ/
-    key.json      # что делает, что принимает, что возвращает, сколько кэшировать
+  my-key/
+    key.json      # what it does, what it takes, what it returns, how long to cache
     handler.py    # async def run(params, ctx) -> dict
 ```
 
-`ctx` — единственная дверь наружу: `await ctx.fetch(url)` уже проходит через
-общий кран запросов. Необязательная `canonical(params)` приводит вход к канону
-**до** кэша — без неё `durov`, `DUROV` и `t.me/durov/123` были бы тремя разными
-записями и тремя походами в сеть.
+`ctx` is the only door to the outside world: `await ctx.fetch(url)` already goes
+through a per-host rate limiter. The optional `canonical(params)` brings input
+to a canonical form **before** the cache — without it `durov`, `DUROV` and
+`t.me/durov/123` would be three separate entries and three trips to the network.
 
-Загрузчик проверяет: `id` совпадает с именем папки, у параметров типы из
-списка, есть короткое описание, поле для короткого ответа описано в `returns`.
+The loader checks: `id` matches the folder name, parameter types come from a
+fixed list, there is a short summary, and the field used for the one-line answer
+is described in `returns`.
 
-## Запуск
+Note for contributors: the source comments are written in Russian, the same
+language the project is developed in. Everything a user reads — this file, the
+package page, the site — is English.
+
+## Running it
 
 ```bash
 pip install -r requirements.txt
 python run.py            # http://127.0.0.1:8110
-pytest tests/ -q         # 131 тест, офлайн, меньше двух секунд
+pytest tests/ -q         # 131 tests, offline, under two seconds
 ```
 
-## Прод
+## Production
 
-Докер на 8105, nginx отдаёт под `/keys/`, базы на томе `keys-data`.
+Docker on 8105, nginx serves it under `/keys/`, databases on the `keys-data`
+volume.
 
 ```bash
-tar czf keys.tgz . && scp keys.tgz ubuntu@137.74.173.198:/tmp/
-ssh ubuntu@137.74.173.198 'rm -rf ~/keys && mkdir ~/keys && tar xzf /tmp/keys.tgz -C ~/keys \
+tar czf keys.tgz . && scp keys.tgz ubuntu@SERVER:/tmp/
+ssh ubuntu@SERVER 'rm -rf ~/keys && mkdir ~/keys && tar xzf /tmp/keys.tgz -C ~/keys \
   && cd ~/keys && docker build -t keys:latest . && docker rm -f keys \
   && docker run -d --name keys --restart unless-stopped -p 127.0.0.1:8105:8105 \
      --env-file ~/keys.env -v keys-data:/app/data keys:latest'
 ```
 
-Секреты в `~/keys.env` на сервере, в репозиторий не попадают:
+Secrets live in `~/keys.env` on the server and never reach the repository:
 
 ```
-KEYS_ADMIN_TOKEN=…               # без него выдача ключей закрыта
-KEYS_TRUSTED_PROXIES=127.0.0.1   # адрес nginx; без этого заголовкам не верим
-KEYS_REQUIRE_HTTPS=1             # ключ доступа только по HTTPS
+KEYS_ADMIN_TOKEN=…               # without it, key issuing is closed
+KEYS_TRUSTED_PROXIES=127.0.0.1   # nginx address; without it we trust no headers
+KEYS_REQUIRE_HTTPS=1             # access keys over HTTPS only
 ```
 
-Приложение знает свой префикс через `--root-path /keys`, поэтому ссылки и
-примеры на страницах правильные сами по себе.
+The app knows its own prefix through `--root-path /keys`, so links and code
+samples on the pages come out correct by themselves.
 
-## Выпуск библиотеки
+## Releasing the library
 
-Токенов нет: PyPI доверяет GitHub напрямую по OIDC.
+No tokens involved: PyPI trusts GitHub directly over OIDC.
 
 ```bash
-# поднять version в clients/python/pyproject.toml, затем
+# bump version in clients/python/pyproject.toml, then
 git tag v0.3.0 && git push origin v0.3.0
 ```
 
-Перед отправкой прогоняются тесты — версию на PyPI не перезалить, сломанное
-чинится только новым номером.
+Tests run before the upload — a version on PyPI cannot be replaced, and broken
+code can only be fixed by a new number.
 
-## Что защищает ключ доступа
+## What protects an access key
 
-| От чего | Как |
+| Against | How |
 | --- | --- |
-| Подделка адреса заголовком | `X-Real-IP` читается только от прокси из `KEYS_TRUSTED_PROXIES` |
-| Утечка ключа в логи | `token=` вырезается из строки запроса перед записью |
-| Утечка базы | хранится sha256; в открытом виде лежит только публичный ключ |
-| Кража ключа | отзыв самим владельцем, действует сразу и не воскресает из кэша |
-| Тихая подмена | неизвестный или отозванный ключ — 401, а не молчаливое понижение |
-| Раздача кем попало | выдача только по `KEYS_ADMIN_TOKEN` |
-| Забивание очереди | ожидание общего крана ограничено: занято — 503, а не висящее соединение |
+| Spoofing the address via a header | `X-Real-IP` is read only from proxies listed in `KEYS_TRUSTED_PROXIES` |
+| Leaking a key into logs | `token=` is cut out of the request line before it is written |
+| A leaked database | sha256 is stored; only the public key is kept in the clear |
+| A stolen key | self-service revocation, effective immediately, not resurrected from cache |
+| Silent downgrade | an unknown or revoked key gets a 401, not a quiet drop to anonymous |
+| Anyone handing out keys | issuing requires `KEYS_ADMIN_TOKEN` |
+| Clogging the queue | waiting on the shared tap is bounded: busy means 503, not a hanging connection |
 
-## Сколько выдержит сервер
+## What the server can take
 
-Замеры на боевой машине (2 ядра, 3.8 ГБ, рядом ещё дюжина контейнеров):
+Measurements on the production machine (2 cores, 3.8 GB, a dozen other
+containers alongside):
 
-| Что мерили | Результат |
+| What was measured | Result |
 | --- | --- |
-| Одна страница t.me | ~10 КБ, **75 мс** |
-| Восемь параллельно | **171 мс** на всю пачку |
-| Разбор страницы | **0.085 мс** → ~11 700 страниц/сек на ядре |
+| One `t.me` page | ~10 KB, **75 ms** |
+| Eight in parallel | **171 ms** for the whole batch |
+| Parsing a page | **0.085 ms** → ~11 700 pages/sec on one core |
 
-Процессор ни при чём — разбор в 900 раз дешевле сетевого похода. Узкое место
-одно: терпение t.me к нашему IP. Поэтому наружу ходим через общий кран на
-5 запросов/сек — это не лимит на человека, а страховка от бана. Кэш его
-разгружает: живой канал держим 6 часов, мёртвый — час, счётный ключ — сутки.
+The CPU is not the issue — parsing is 900 times cheaper than the network trip.
+There is exactly one bottleneck: how much `t.me` tolerates from our IP. So we go
+out through a tap of 5 requests per second — that is not a per-user limit but
+insurance against a ban. The cache relieves it: a live channel is kept for six
+hours, a dead one for an hour.
 
 ---
 
-## Кто это писал
+## Who wrote this
 
-Код написан Claude (Opus 5) под руководством владельца репозитория: постановка
-задач, решения об устройстве и все проверки на живых данных — его, реализация —
-модели. Разбор превью-страницы Telegram взят из его же прежнего проекта TG Catalog.
+The code was written by Claude (Opus 5) under the direction of the repository
+owner: the tasks, the design decisions and every check against live data are
+his; the implementation is the model's. The Telegram preview parsing came out of
+his own earlier project, TG Catalog.
 
-В истории это видно построчно: коммиты помечены `Co-Authored-By`.
+Commits carry `Co-Authored-By` where this applies.

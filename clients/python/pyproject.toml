@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "monokeys"
-version = "0.2.7"
-description = "Клиент «Ключей»: маленькие умные функции одним вызовом, без зависимостей"
+version = "0.2.8"
+description = "Small smart functions in one call: Telegram link checks, weather, rates, wiki — no API keys, no dependencies"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Monoblock" }]
-keywords = ["telegram", "api", "keys", "utilities"]
+keywords = ["telegram", "api", "search", "weather", "currency", "wikipedia", "mcp", "utilities"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

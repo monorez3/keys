@@ -1,7 +1,9 @@
+**English** · [Русский](README.ru.md)
+
 # monokeys
 
-Клиент «Ключей» — маленьких умных функций, которые зовутся одним вызовом.
-Внутри только стандартная библиотека: **зависимостей нет**, один файл.
+A client for **Keys** — small smart functions, each callable in one line.
+Standard library only: **no dependencies**, one file.
 
 ```bash
 pip install monokeys
@@ -10,212 +12,168 @@ pip install monokeys
 ```python
 from monokeys import Keys
 
-k = Keys()                                    # настраивать нечего
+k = Keys()                                    # nothing to configure
 
 print(k.alive.text("@durov"))
-# жив · channel · Pavel Durov · 10 998 851 subscribers
+# alive · channel · Pavel Durov · 10 998 851 subscribers
 
-print(k.answer.text("погода в Хайфе"))
-# Хайфе: 28.9°C, ветер 2.6 м/с, влажность 58% · источник: weather
+print(k.answer.text("weather in Haifa"))
+# Haifa: 27.4°C, wind 8.0 m/s, humidity 68% · source: weather
 ```
 
-Ни регистрации, ни ключа доступа, ни лимита: клиент сам берёт публичный ключ,
-а он бессрочный и без счётчика.
+No signup, no access key, no quota: the client picks up the public key itself,
+and that key never expires and is never metered.
 
-## `alive` — жив ли канал Telegram
+## `alive` — is this Telegram link alive?
 
-Без аккаунта, без Bot API, без токена: читается публичная превью-страница
-`t.me`, та самая, по которой мессенджеры рисуют картинку ссылки.
+No account, no Bot API, no token: it reads the public `t.me` preview page — the
+same one messengers use to draw a link card.
 
 ```python
-k.alive("@durov")                  # весь ответ объектом
-k.alive.members_count("@durov")    # 11005185 — только число, уже числом
+k.alive("@durov")                  # the whole answer as an object
+k.alive.members_count("@durov")    # 11005185 — just the number, already an int
 k.alive.kind("ru_python")          # group
 k.alive.verified("@BotFather")     # True
 ```
 
-Понимает любую форму ссылки: `@durov`, `t.me/durov`, `t.me/durov/123`,
-`t.me/s/durov`, `t.me/+AbCdEf…`, `t.me/joinchat/…`, `DUROV`.
+Understands every shape a link comes in: `@durov`, `t.me/durov`,
+`t.me/durov/123`, `t.me/s/durov`, `t.me/+AbCdEf…`, `t.me/joinchat/…`, `DUROV`.
 
-Поля ответа: `is_alive`, `kind` (channel / group / bot / user), `title`,
+Fields: `is_alive`, `kind` (channel / group / bot / user), `title`,
 `description`, `members_count`, `members_label`, `online_count`, `verified`,
 `is_private`, `needs_request`, `restricted`, `has_preview`, `avatar_url`,
 `deep_link`, `action`, `username`, `url`, `error`.
 
-Тонкость, из-за которой наивная проверка врёт: на удалённый канал Telegram
-отвечает `200` и рисует заглушку. Живой от мёртвого отличается разметкой, а не
-кодом ответа.
+The subtlety that makes naive checks lie: Telegram answers `200` for a deleted
+channel and renders a placeholder. Alive and dead differ in the markup, not in
+the status code.
 
-## `answer` — ответ из многих источников разом
+## `answer` — one question, many sources at once
 
 ```python
-k.answer.text("кто такой Павел Дуров")
-# Па́вел Вале́рьевич Ду́ров — российский и эмиратский предприниматель… · источник: wiki
-
-k.answer.text("погода в Хайфе")     # Хайфе: 28.9°C, ветер 2.6 м/с · источник: weather
-k.answer.text("курс доллара к шекелю")  # 1 USD = 2.9728 ILS (ЕЦБ) · источник: rates
-k.answer("Хайфа", sources="osm,wiki")   # только карта и Википедия
+k.answer.text("who is Pavel Durov")   # Pavel Valeryevich Durov is a technology…
+k.answer.text("weather in Haifa")     # Haifa: 27.4°C, wind 8.0 m/s
+k.answer.text("100 usd to eur")       # 100 USD = 86.23 EUR · rate 0.86
+k.answer("Haifa", sources="osm,wiki") # only the map and Wikipedia
 ```
 
-Вопрос уходит **сразу в несколько мест**, каждое отвечает своим полем, отдельно
-называется лучший ответ и ссылки для проверки. Если `sources` не указать, ключ
-смотрит на вопрос и выбирает сам: про город — карту, про валюту — курсы, про
-пакет — реестры пакетов; общая справка спрашивается всегда.
+The question goes to several places in parallel, each answers in its own field,
+and the best one is named separately along with links you can check it against.
+Leave `sources` out and the key reads the question and decides for itself.
 
-Тринадцать источников, **ни одного платного ключа**: Википедия, Викиданные,
-Викисловарь, DuckDuckGo, OpenStreetMap, Open-Meteo, курсы валют, Crossref, arXiv,
+Thirteen sources, **not a single paid key**: Wikipedia, Wikidata, Wiktionary,
+DuckDuckGo, OpenStreetMap, Open-Meteo, exchange rates, Crossref, arXiv,
 Open Library, PyPI, npm, GitHub.
 
-Чего тут нет намеренно: **моделей** — все бесплатные упираются в лимит, а их
-ответ нечем проверить; и **выдачи поисковиков** — её нельзя брать по их
-правилам, а IP у сервера один на все продукты.
+### Ask exactly the source you want
 
-### Спросить именно тот источник, который нужен
-
-Каждый источник — отдельный метод. Одно и то же слово, разные ответы:
+Every source is a method of its own. Same word, different answers:
 
 ```python
-k.answer.weather("Хайфа")   # Хайфа: 27.7°C, ветер 6.5 м/с, влажность 65%
-k.answer.osm("Хайфа")       # Хайфа, נפת חיפה, Хайфский округ, Израиль
-k.answer.wiki("Хайфа")      # Ха́йфа — третий по величине город Израиля…
-k.answer.wikidata("Хайфа")  # Хайфа — город на севере Израиля
-k.answer.rates("доллар к шекелю")   # 1 USD = 2.9728 ILS (ЕЦБ)
+k.answer.weather("Haifa")   # Haifa: 27.4°C, wind 8.0 m/s, humidity 68%
+k.answer.osm("Haifa")       # Haifa, Haifa Subdistrict, Haifa District, Israel
+k.answer.wiki("Haifa")      # Haifa is the third-largest city in Israel…
+k.answer.rates("100 usd to eur")    # 100 USD = 86.23 EUR
 k.answer.github("telegram")         # DrKLO/Telegram ★29798
 ```
 
-То же самое ссылкой: `?only=weather` или `?sources=weather`.
-
-Просить поле источника — это и значит спросить сам источник: слова «погода»
-в вопросе может не быть, а погоду вы всё равно хотите.
-
-### Умные курсы
+### Exchange rates that do the math
 
 ```python
-k.answer.rates("100 долларов в шекели")
-# 100 USD = 297.28 ILS · курс 2.97 · на 2026-08-28, ЕЦБ
-
-k.answer.rates("сколько будет 50 евро в шекелях и долларах")
-# 50 EUR = 173.06 ILS, 58.22 USD · курс 3.46 · на 2026-08-28, ЕЦБ
-
-k.answer.rates("100 usd to eur")     # то же самое по-английски
+k.answer.rates("100 dollars to shekels")   # 100 USD = 299.24 ILS · rate 2.99
+k.answer.rates("50 eur to ils and usd")    # 50 EUR = 173.06 ILS, 58.22 USD
+k.answer.rates("100 UZS to KGS")           # codes work for all 166 currencies
 ```
 
-Сумму, валюты и их порядок ключ разбирает сам: «100 долларов **в** шекели» —
-это из USD в ILS, а не наоборот. Целей может быть несколько.
-Курсы понимают сумму, порядок и **166 валют** — рубль, гривну, тенге, лари,
-драм и всё остальное; словами или трёхбуквенным кодом:
+The amount, the currencies and their order are parsed out of the question.
+**166 currencies**, including ones the European Central Bank does not publish.
+
+### Two languages
+
+The language is detected from the question itself: Cyrillic goes to Russian
+sources, Latin to English ones.
+
+## Three ways to call any key
 
 ```python
-k.answer.rates("50000 рублей в тенге")     # 50 000 RUB = 269 671.85 KZT · курс 5.39
-k.answer.rates("1000 гривен в рублях и долларах")
-k.answer.rates("100 UZS в KGS")            # код работает для всех 166
+k.alive("@durov")                    # the whole answer: an object with fields
+k.alive.members_count("@durov")      # a single field, in its own type
+k.alive.text("@durov")               # a line for humans
 ```
 
+## Arguments
 
-### Работает на двух языках
+### `Keys(...)` — the connection
 
-Язык определяется по самому вопросу: русскими буквами — русские источники,
-латиницей — английские. Приметы и слова темы разобраны на обоих:
-
-```python
-k.answer.text("погода в Хайфе")   ==  k.answer.text("weather in Haifa")   # оба идут в погоду
-k.answer.text("где находится Хайфа") ==  k.answer.text("where is Haifa")  # оба идут на карту
-```
-
-### Чем `wiki` отличается от `wikidata`
-
-Это разные вещи, и полезны они в разных случаях:
-
-| | что это | пример на «Хайфа» |
+| Argument | Default | What it does |
 | --- | --- | --- |
-| `wiki` | сводка статьи, написанная людьми — связный текст на несколько предложений | Ха́йфа — третий по величине город Израиля после Иерусалима и Тель-Авива, со смешанным еврейско-арабским населением… |
-| `wikidata` | структурированный факт: название и одна строка «что это за сущность», плюс код вида Q42 | Хайфа — город на севере Израиля, третий по величине город страны |
-
-Проще так: `wiki` — прочитать, `wikidata` — разобрать программой. Второй короче,
-одинаков на всех языках и удобен, когда нужно понять **тип** вещи, а не её
-описание.
-
-## Три способа позвать любой ключ
-
-```python
-k.alive("@durov")                    # весь ответ: объект с полями
-k.alive.members_count("@durov")      # только одно поле, нужного типа
-k.alive.text("@durov")               # строка для человека
-```
-
-## Аргументы
-
-### `Keys(...)` — подключение
-
-| Аргумент | По умолчанию | Что делает |
-| --- | --- | --- |
-| `token` | `KEYS_API_KEY`, иначе публичный ключ с сервера | ключ доступа; передаётся только заголовком |
-| `base` | `https://monoblock.casa/keys` | адрес сервера |
-| `timeout` | `20.0` | сколько ждать ответа, секунд |
-| `retries` | `1` | повторов при обрыве связи (отказ сервера не повторяется) |
-| `user_agent` | `monokeys/<версия>` | как представляться серверу |
+| `token` | `KEYS_API_KEY`, else the public key from the server | access key; sent in a header only |
+| `base` | `https://monoblock.casa/keys` | server address |
+| `timeout` | `20.0` | how long to wait for an answer, seconds |
+| `retries` | `1` | retries on a dropped connection (a server refusal is not retried) |
+| `user_agent` | `monokeys/<version>` | how to introduce yourself to the server |
 
 ```python
 k = Keys(timeout=5, retries=2)
 ```
 
-### `k.<ключ>(...)` — вызов
+### `k.<key>(...)` — the call
 
-| Аргумент | По умолчанию | Что делает |
+| Argument | Default | What it does |
 | --- | --- | --- |
-| `value` | — | главное значение: ссылка или `@username` |
-| `only` | `""` | вернуть только это поле вместо всего ответа |
-| `fmt` | `"json"` | `json` — поля, `text` — строка для человека, `bool` — да/нет |
-| `timeout` | как у клиента | переопределить ожидание для одного вызова |
-| `**params` | — | остальные параметры ключа по именам |
+| `value` | — | the main value: a link for `alive`, a question for `answer` |
+| `only` | `""` | return just this field instead of the whole answer |
+| `fmt` | `"json"` | `json` — fields, `text` — a line for humans, `bool` — yes/no |
+| `timeout` | as the client | override the wait for a single call |
+| `**params` | — | the key's other parameters, by name |
 
 ```python
 k.alive("@durov", only="members_count")   # 11005185
 k.alive("@durov", fmt="bool")             # 'true'
-k.alive("@durov", timeout=3)              # не ждать дольше трёх секунд
+k.alive("@durov", timeout=3)              # do not wait longer than three seconds
 ```
 
-### Что можно спросить у клиента
+### What you can ask the client
 
-| Вызов | Что вернёт |
+| Call | What comes back |
 | --- | --- |
-| `k.names()` | имена всех доступных ключей |
-| `k.fields("alive")` | какие поля возвращает ключ |
-| `k.alive.fields()` | то же самое, короче |
-| `k.catalog(refresh=True)` | полный каталог с описаниями, спросить заново |
-| `k.call("alive", "@durov")` | позвать ключ, имя которого известно только в рантайме |
+| `k.names()` | names of every available key |
+| `k.fields("alive")` | which fields a key returns |
+| `k.alive.fields()` | the same, shorter |
+| `k.catalog(refresh=True)` | the full catalogue with descriptions, fetched anew |
+| `k.call("alive", "@durov")` | call a key whose name is only known at runtime |
 
-## Ответ
+## The answer
 
-`Answer` — это словарь, который умеет отвечать и как объект:
+`Answer` is a dict that also answers like an object:
 
 ```python
 res = k.alive("@durov")
-res.title == res["title"]     # одно и то же
-bool(res)                     # True, если ключ ответил утвердительно
-dict(res)                     # обычный словарь
+res.title == res["title"]     # the same thing
+bool(res)                     # True if the key answered in the affirmative
+dict(res)                     # a plain dict
 ```
 
-Опечатка не молчит:
+Typos do not stay silent:
 
 ```python
 res.tittle
-# AttributeError: в ответе нет поля 'tittle'; есть: username, url, is_alive, ...
+# AttributeError: no field 'tittle' in the answer; there is: username, url, is_alive, ...
 
 k.alive.members_cout("@durov")
-# AttributeError: у ключа 'alive' нет поля 'members_cout'; есть: is_alive, kind, ...
+# AttributeError: key 'alive' has no field 'members_cout'; there is: is_alive, kind, ...
 ```
 
-## Ошибки
+## Errors
 
-| Исключение | Когда |
+| Exception | When |
 | --- | --- |
-| `AccessDenied` | ключ неизвестен, отозван или отправлен не по HTTPS |
-| `Unavailable` | сервер занят или источник не ответил — осмысленно повторить |
-| `KeysError` | всё остальное: нет такого ключа, мусор на входе |
+| `AccessDenied` | the key is unknown, revoked, or was sent over plain HTTP |
+| `Unavailable` | the server is busy or a source did not answer — worth retrying |
+| `KeysError` | everything else: no such key, garbage input |
 
-У всех есть `.status` и `.body`. Первые два — потомки `KeysError`, ловятся
-одним `except`.
+All of them carry `.status` and `.body`. The first two subclass `KeysError`, so
+one `except` catches them all.
 
 ```python
 from monokeys import Keys, AccessDenied, Unavailable
@@ -223,53 +181,53 @@ from monokeys import Keys, AccessDenied, Unavailable
 try:
     res = k.alive("@durov")
 except AccessDenied:
-    print("ключ доступа не подошёл")
+    print("the access key was not accepted")
 except Unavailable:
-    print("сейчас занято, попробую позже")
+    print("busy right now, will retry later")
 ```
 
-## Методы не зашиты в клиент
+## Methods are not hard-coded
 
-Список ключей и их полей приходит с сервера, поэтому новый ключ доступен сразу,
-без обновления пакета:
+The list of keys and their fields comes from the server, so a new key is
+available at once, without updating the package:
 
 ```python
 k.names()          # ['alive', 'answer']
-k.несуществующий   # AttributeError со списком существующих
+k.no_such_key      # AttributeError listing the ones that exist
 ```
 
-## Ключ доступа
+## Access keys
 
-Заводить не нужно — публичный работает у всех и без счётчика. Свой нужен только
-тем, кому нужен собственный рубильник; его выдаёт владелец сервиса, и он тоже
-бессрочный. Положите в `.env`:
+You do not need one — the public key works for everybody and is never metered.
+Your own is only for those who want a kill switch of their own; the service
+owner issues it, and it never expires either. Put it in `.env`:
 
 ```
 KEYS_API_KEY=kx_...
 ```
 
-Отозвать свой ключ, если он утёк:
+Revoke your own key if it leaks:
 
 ```bash
 curl -X POST -H "Authorization: Bearer kx_..." https://monoblock.casa/keys/token/revoke
 ```
 
-## Если ставить пакет не хочется
+## If you would rather not install anything
 
-Тот же самый файл можно просто скачать — из него и собран пакет:
+The very same file can simply be downloaded — the package is built from it:
 
 ```bash
 curl https://monoblock.casa/keys/sdk/python > monokeys.py
 ```
 
-А можно вообще без клиента — ключ это обычная ссылка:
+Or skip the client entirely — a key is just a link:
 
 ```
-https://monoblock.casa/keys/alive/@durov  ->  жив · channel · Pavel Durov · …
+https://monoblock.casa/keys/alive/@durov  ->  alive · channel · Pavel Durov · …
 ```
 
 ---
 
-Документация целиком: **https://monoblock.casa/keys/client**
+Full documentation: **https://monoblock.casa/keys/client**
 
-Исходники: **https://github.com/monorez3/keys**
+Source: **https://github.com/monorez3/keys**

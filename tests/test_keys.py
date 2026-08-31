@@ -931,9 +931,9 @@ def test_нелатинский_user_agent_объясняет_себя():
 
 
 def test_обычный_ключ_и_user_agent_проходят():
-    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.7")
+    k = client_lib.Keys(token="kx_ABCdef123-_", user_agent="monokeys/0.2.8")
     assert k.token == "kx_ABCdef123-_"
-    assert k.user_agent == "monokeys/0.2.7"
+    assert k.user_agent == "monokeys/0.2.8"
 
 
 def test_пустое_значение_в_пути_не_затирает_именованный_параметр(monkeypatch):
