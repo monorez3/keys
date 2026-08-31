@@ -138,9 +138,12 @@ async def call_key(key_id: str, params: dict, who: str, quota: Quota | None,
 
     # «дай мне поле weather» значит «спроси погодный источник», а не «спроси
     # кого попало и покажи пустое поле». Ключ объявляет это в манифесте
-    выбор = key.manifest.откуда_взять(only)
-    if выбор and not params.get(выбор[0]):
-        params = params | {выбор[0]: выбор[1]}
+    # «дай поля weather и osm» значит «спроси оба источника», а не «спроси
+    # кого попало и покажи два пустых поля»
+    источники = [key.manifest.откуда_взять(п) for п in поля_из(only)]
+    источники = [и for и in источники if и]
+    if источники and not params.get(источники[0][0]):
+        params = params | {источники[0][0]: ",".join(и[1] for и in источники)}
 
     missing = [p.name for p in key.manifest.params if p.required and not params.get(p.name)]
     if missing:
@@ -250,31 +253,44 @@ async def list_keys() -> dict:
     }
 
 
+def поля_из(only: str) -> list[str]:
+    """'title,members_count' -> ['title', 'members_count']."""
+    return [п.strip() for п in (only or "").replace(";", ",").split(",") if п.strip()]
+
+
 def respond(key_id: str, status: int, body: dict, fmt: str, only: str = ""):
     """Один результат — несколько форм ответа.
 
-    only=<поле> отдаёт ровно одно значение и ничего вокруг: чаще всего нужен
-    не весь ответ, а число подписчиков. Имя поля сверяется с манифестом, иначе
-    опечатка возвращала бы пустоту, которую легко принять за ноль.
+    only=<поля> отдаёт ровно то, что просили, и ничего вокруг. Полей можно
+    перечислить сколько угодно через запятую: приложению обычно нужны два-три
+    из двадцати, и тащить остальные незачем. Имена сверяются с манифестом —
+    опечатка иначе вернула бы пустоту, которую легко принять за ноль.
     """
     key = KEYS.get(key_id)
     if key is None:
         return JSONResponse(body, status_code=status)
 
-    if only:
-        known = {r.name for r in key.manifest.returns}
-        if only not in known:
-            return respond(
-                key_id, 400,
-                {"error": f"поля '{only}' у ключа нет", "поля": sorted(known)},
-                "json",
+    поля = поля_из(only)
+    if поля:
+        известные = {r.name for r in key.manifest.returns}
+        чужие = [п for п in поля if п not in известные]
+        if чужие:
+            какое = "поля" if len(чужие) == 1 else "полей"
+            return JSONResponse(
+                {"error": f"{какое} {', '.join(repr(п) for п in чужие)} у ключа нет",
+                 "поля": sorted(известные)},
+                status_code=400,
             )
         if status >= 400:
             return PlainTextResponse(body.get("error", "ошибка"), status_code=status)
-        value = body.get(only)
+
         if fmt == "json":
-            return JSONResponse({only: value}, status_code=status)
-        return PlainTextResponse("" if value is None else str(value), status_code=status)
+            return JSONResponse({п: body.get(п) for п in поля}, status_code=status)
+        значения = ["" if body.get(п) is None else str(body.get(п)) for п in поля]
+        # одно поле — голое значение, несколько — через тот же разделитель,
+        # что и в коротком ответе: строку потом легко разрезать
+        return PlainTextResponse(значения[0] if len(значения) == 1 else " · ".join(значения),
+                                 status_code=status)
 
     if fmt == "json":
         return JSONResponse(body, status_code=status)

@@ -185,6 +185,31 @@ the server, so a new key is available at once, without updating the package.
 
 Full reference with examples: **https://monoblock.casa/keys/client**
 
+### Arguments do exactly what you ask
+
+`only=` takes as many fields as you want — an application usually needs two or
+three out of twenty, not the lot:
+
+```
+/alive/@durov?only=title,members_count,kind
+→ Pavel Durov · 10971256 · channel
+
+/alive/@durov?only=title,verified&fmt=json
+→ {"title":"Pavel Durov","verified":true}
+```
+
+A single field stays a bare value, ready to drop straight into a variable. A
+typo in any of the names is refused with the list of real fields.
+
+For `answer`, the fields you name also say **who to ask**:
+
+```
+/answer/Haifa?only=weather,osm
+/answer/Haifa?sources=osm,wikidata     # both answers, not just the winner
+```
+
+`lang=` works across languages too — the subject is translated through the map.
+
 ## You can skip the library entirely
 
 A key is just a link — anything can open it:

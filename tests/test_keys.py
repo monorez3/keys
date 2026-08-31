@@ -1317,3 +1317,52 @@ def test_явный_vs_сильнее_угаданного():
     assert crypto.canonical({"q": "bitcoin", "vs": "usd,ils"})["vs"] == "ils,usd"
     # без аргумента остаётся угаданное
     assert crypto.canonical({"q": "bitcoin"})["vs"] == "eur,ils,usd"
+
+
+# --- аргументы должны делать ровно то, что просят ---------------------------- #
+
+def test_only_с_несколькими_полями(monkeypatch):
+    """Приложению обычно нужны два-три поля из двадцати, а не всё подряд.
+
+    Значение своё, не «durov»: соседний тест кладёт под этим именем свою
+    заглушку в кэш, и тест ловил бы её вместо своей.
+    """
+    async def подделка(params, ctx):
+        return {"is_alive": True, "title": "Pavel Durov", "members_count": 11005185,
+                "kind": "channel"}
+
+    monkeypatch.setattr(приложение.KEYS["alive"], "run", подделка)
+
+    строкой = клиент.get("/alive/only_multi_test", params={"only": "title,members_count"})
+    assert строкой.status_code == 200
+    assert строкой.text == "Pavel Durov · 11005185"
+
+    полями = клиент.get("/alive/only_multi_test", params={"only": "title,kind", "fmt": "json"})
+    assert полями.json() == {"title": "Pavel Durov", "kind": "channel"}
+
+    одно = клиент.get("/alive/only_multi_test", params={"only": "title"})
+    assert одно.text == "Pavel Durov", "одно поле остаётся голым значением"
+
+
+def test_only_ругается_на_каждое_чужое_поле():
+    ответ = клиент.get("/alive/only_bad_test", params={"only": "title,нетполя,ещёнет"})
+    assert ответ.status_code == 400
+    тело = ответ.json()
+    assert "нетполя" in тело["error"] and "ещёнет" in тело["error"]
+    assert "title" in тело["поля"]
+
+
+def test_поля_из_разбирает_разделители():
+    assert приложение.поля_из("a,b") == ["a", "b"]
+    assert приложение.поля_из(" a , b ;c ") == ["a", "b", "c"]
+    assert приложение.поля_из("") == []
+    assert приложение.поля_из("a") == ["a"]
+
+
+def test_язык_источника_отменяет_проверку_на_похожесть():
+    """На «Хайфа» английская Википедия отвечает «Haifa is the third-largest
+    city…»: общих слов ноль, и честный ответ выбрасывался как непохожий."""
+    assert отв.похоже("Хайфа", "Haifa is the third-largest city in Israel") is False
+    assert отв.язык_вопроса("Хайфа") == "ru"
+    # значит при явном lang=en сравнивать нечего — это и проверяет ключ
+    assert отв.язык_вопроса("Хайфа") != "en"
