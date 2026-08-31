@@ -53,8 +53,12 @@ RESTRICTED_MARKERS = (
 )
 LEGACY_BOTS = {"botfather", "stickers", "gif", "vid", "pic", "bing", "wiki", "imdb"}
 
+# В короткой форме адрес попадает в путь, а двойной слэш по дороге
+# схлопывается в одинарный: /alive/https://t.me/x приезжает как https:/t.me/x.
+# Поэтому допускаем и одну косую — иначе ссылка на пост не работает именно
+# там, где её удобнее всего вставить.
 LINK_RE = re.compile(
-    r"^(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/"
+    r"^(?:https?:/{1,2})?(?:t\.me|telegram\.me|telegram\.dog)/"
     r"(?:s/)?(?:(joinchat)/)?(\+?[\w\d_-]+)",
     re.I,
 )

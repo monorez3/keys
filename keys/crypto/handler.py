@@ -110,8 +110,11 @@ def _красиво(число: float) -> str:
 
 
 def canonical(params: dict) -> dict:
-    монета, валюты = разобрать(params.get("q", ""))
-    return params | {"q": монета, "vs": ",".join(sorted(валюты))}
+    """Канон до кэша. Явно переданный vs= сильнее угаданного из вопроса —
+    иначе аргумент молча ничего не менял."""
+    монета, из_вопроса = разобрать(params.get("q", ""))
+    явно = [в.strip().lower() for в in (params.get("vs") or "").split(",") if в.strip()]
+    return params | {"q": монета, "vs": ",".join(sorted(явно or из_вопроса))}
 
 
 async def run(params: dict, ctx) -> dict:

@@ -1288,3 +1288,32 @@ def test_crypto_занятость_не_выдаётся_за_отсутстви
 
 def test_все_ключи_на_месте():
     assert set(discover(ROOT / "keys")) == {"alive", "answer", "crypto", "dev"}
+
+
+# --- находки полной ревизии ------------------------------------------------- #
+
+def test_ссылка_на_пост_в_короткой_форме():
+    """В короткой форме адрес попадает в путь, и двойная косая по дороге
+    схлопывается: /alive/https://t.me/x приезжает как https:/t.me/x."""
+    assert handler.normalize("https:/t.me/durov/123") == "durov"
+    assert handler.normalize("https://t.me/durov/123") == "durov"
+    assert handler.normalize("http:/telegram.me/durov") == "durov"
+
+
+def test_коды_валют_строчными_доходят_до_курсов():
+    """«100 usd to eur» уходило в общую справку и получало статью про
+    минимальные зарплаты вместо курса."""
+    for вопрос in ["100 usd to eur", "50 gbp to jpy", "1 chf в rub"]:
+        assert "rates" in отв.подобрать(вопрос), вопрос
+    # и по-прежнему не ловим обычные английские слова
+    for вопрос in ["who is Pavel Durov", "what is the key", "how are you"]:
+        assert "rates" not in отв.подобрать(вопрос), вопрос
+
+
+def test_явный_vs_сильнее_угаданного():
+    """Аргумент vs= молча не работал: канон затирал его тем, что угадал
+    из вопроса."""
+    assert crypto.canonical({"q": "bitcoin", "vs": "usd"})["vs"] == "usd"
+    assert crypto.canonical({"q": "bitcoin", "vs": "usd,ils"})["vs"] == "ils,usd"
+    # без аргумента остаётся угаданное
+    assert crypto.canonical({"q": "bitcoin"})["vs"] == "eur,ils,usd"
