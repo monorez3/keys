@@ -704,10 +704,15 @@ import clientdoc  # noqa: E402
 
 
 def test_каждый_аргумент_клиента_описан_в_readme():
-    """Аргумент появился в клиенте, а описать забыли — тест краснеет."""
-    readme = (ROOT / "clients" / "python" / "README.md").read_text(encoding="utf-8")
-    for имя in clientdoc.ОБЯЗАТЕЛЬНО_В_README:
-        assert имя in readme, f"аргумент '{имя}' не описан в README пакета"
+    """Аргумент появился в клиенте, а описать забыли — тест краснеет.
+
+    Оба README, а не только английский: русский однажды отстал на целый
+    аргумент именно потому, что его никто не проверял.
+    """
+    for имя_файла in ("README.md", "README.ru.md"):
+        readme = (ROOT / "clients" / "python" / имя_файла).read_text(encoding="utf-8")
+        for имя in clientdoc.ОБЯЗАТЕЛЬНО_В_README:
+            assert имя in readme, f"аргумент '{имя}' не описан в {имя_файла}"
 
 
 def test_описанные_аргументы_и_правда_есть_в_клиенте():

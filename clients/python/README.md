@@ -164,6 +164,25 @@ k.alive("@durov", fmt="bool")             # 'true'
 k.alive("@durov", timeout=3)              # do not wait longer than three seconds
 ```
 
+### Arguments of particular keys
+
+| key | argument | what it does |
+|---|---|---|
+| `answer` | `sources` | which sources to ask; several separated by commas, empty — the key picks |
+| `answer` | `lang` | source language: `ru` or `en` |
+| `crypto` | `vs` | which currencies to price in, comma separated |
+
+```python
+k.answer('Haifa', sources='osm,wikidata')   # both answers, not one
+k.answer('Haifa', sources='wiki', lang='en')
+k.crypto('bitcoin', vs='usd,ils')
+
+k.alive('@durov', only='title,members_count')   # several fields at once
+# 'Pavel Durov · 11005185'
+```
+
+Ask a source in its own language: `lang='en'` with a Russian word will honestly
+find nothing — and stay silent instead of inventing something.
 ### What you can ask the client
 
 | Call | What comes back |

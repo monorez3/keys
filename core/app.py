@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT / "core"))
 
 import docs                                    # noqa: E402
 import spec                                    # noqa: E402
-from limits import Quota                       # noqa: E402
+from limits import АНОНИМ_В_МИНУТУ, АНОНИМ_В_СУТКИ, Quota  # noqa: E402
 from manifest import Manifest                  # noqa: E402
 from registry import discover                  # noqa: E402
 from security import (                         # noqa: E402
@@ -71,7 +71,7 @@ _client: httpx.AsyncClient | None = None
 # С ключом — без счётчика вообще: ключ выдаёт владелец, и считать чужие
 # запросы он не собирается. Без ключа остаётся проба, чтобы случайный прохожий
 # мог попробовать, но не мог занять собой весь кран.
-QUOTA_ANON = Quota(per_minute=20, per_day=100)
+QUOTA_ANON = Quota(per_minute=АНОНИМ_В_МИНУТУ, per_day=АНОНИМ_В_СУТКИ)
 QUOTA_NONE = None  # у ключа квоты нет — это не оговорка, это решение
 
 # Ключи раздаёт владелец. Без этой переменной выдача просто закрыта: открытое

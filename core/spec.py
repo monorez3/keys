@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from limits import ПРО_ЛИМИТ
 from manifest import Manifest
 from snippets import example_params
 
@@ -86,8 +87,7 @@ def openapi(manifests: list[Manifest], base_url: str) -> dict:
             "version": ВЕРСИЯ,
             "description": (
                 "Маленькие умные функции. Обычный HTTP — работает из любого языка "
-                "без единой зависимости. Лимит: 60 запросов в минуту и 2000 в сутки "
-                "на адрес, ответы из кэша не считаются."
+                "без единой зависимости. " + ПРО_ЛИМИТ
             ),
         },
         "servers": [{"url": base_url}],
@@ -108,8 +108,16 @@ def llms_txt(manifests: list[Manifest], base_url: str) -> str:
         f"Машинная спека: {base_url}/openapi.json",
         f"Для ассистентов (MCP): {base_url}/mcp",
         "",
-        "Лимит: 60 запросов в минуту, 2000 в сутки на адрес.",
-        "Ответы из кэша лимит не тратят (в ответе есть поле cached).",
+        ПРО_ЛИМИТ,
+        "В ответе есть поле cached — пришёл ли он из кэша.",
+        "",
+        "## Общие аргументы, работают у любого ключа",
+        "",
+        "  fmt=text   короткая строка для человека (в короткой форме по умолчанию)",
+        "  fmt=json   все поля",
+        "  fmt=bool   голое true/false",
+        "  only=поле  вернуть только это поле; можно несколько через запятую",
+        "  token=...  ключ доступа (лучше заголовком Authorization: Bearer)",
         "",
         "---",
         "",

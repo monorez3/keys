@@ -291,6 +291,9 @@ def client_page(base_url: str, public_token: str = "") -> str:
         "k.alive(\"@durov\", fmt=\"bool\")             # 'true'\n"
         "k.alive(\"@durov\", timeout=3)              # не ждать дольше трёх секунд</pre>"
 
+        "<h2>Аргументы отдельных ключей</h2>"
+        + таблица(["ключ", "аргумент", "что делает"], clientdoc.СВОИ)
+        + "<pre>k.answer('Хайфа', sources='osm,wikidata')   # оба ответа, а не один\nk.answer('Haifa', sources='wiki', lang='en')\nk.crypto('bitcoin', vs='usd,ils')\n\nk.alive('@durov', only='title,members_count')   # несколько полей сразу</pre>"
         "<h2>Что можно спросить у клиента</h2>"
         + таблица(["вызов", "что вернёт"], clientdoc.СПРОСИТЬ)
 
